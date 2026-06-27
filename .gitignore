@@ -1,6 +1,7 @@
 # Entornos virtuales
 venv/
 env/
+backend/.venv312/
 */venv/
 */env/
 

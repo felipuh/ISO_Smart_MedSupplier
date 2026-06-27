@@ -95,8 +95,8 @@ class Command(BaseCommand):
             profile_role = 'iso_manager' if side == 'supplier' else 'auditor'
             UserProfile.objects.update_or_create(
                 user=user,
-                organization=org,
                 defaults={
+                    'organization': org,
                     'role': profile_role,
                     'job_title': role.replace('_', ' ').title(),
                     'department': 'MedSupplier Demo',

@@ -16,9 +16,6 @@ import httpx
 
 from .client import admin_apps_client
 from .models import AssistantConversation, AssistantMessage, AssistantMemoryItem, AssistantOrgProfile
-from .services.vector_store import AssistantVectorSearchService
-from .tasks import index_text_as_chunks
-from ai_modules.integration.services.aims_governance_engine import AIMSGovernanceService
 
 
 def _bool_param(value, default=True):
@@ -80,6 +77,8 @@ def organization_modules(request, org_id):
 @permission_classes([IsAuthenticated])
 def aims_overview(request):
     """ISO/IEC 42001 AIMS overview and baseline maturity."""
+    from ai_modules.integration.services.aims_governance_engine import AIMSGovernanceService
+
     service = AIMSGovernanceService()
     payload = {
         'operation': 'aims_overview',
@@ -93,6 +92,8 @@ def aims_overview(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def aims_model_lifecycle_check(request):
+    from ai_modules.integration.services.aims_governance_engine import AIMSGovernanceService
+
     service = AIMSGovernanceService()
     payload = {
         'operation': 'model_lifecycle_check',
@@ -104,6 +105,8 @@ def aims_model_lifecycle_check(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def aims_risk_register(request):
+    from ai_modules.integration.services.aims_governance_engine import AIMSGovernanceService
+
     service = AIMSGovernanceService()
     payload = {
         'operation': 'risk_register',
@@ -115,6 +118,8 @@ def aims_risk_register(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def aims_audit_digest(request):
+    from ai_modules.integration.services.aims_governance_engine import AIMSGovernanceService
+
     service = AIMSGovernanceService()
     payload = {
         'operation': 'audit_log_digest',
@@ -423,6 +428,8 @@ def assistant_stream(request):
         rag_chunks = []
         if org_id:
             try:
+                from .services.vector_store import AssistantVectorSearchService
+
                 rag_chunks = AssistantVectorSearchService.search(
                     org_id=org_id,
                     query_text=question,
@@ -621,6 +628,8 @@ def assistant_state(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def index_document(request):
+    from .tasks import index_text_as_chunks
+
     org_id = getattr(request, 'organization_id', None)
     if not org_id:
         return Response({'detail': 'organization_id no disponible en la sesión.'}, status=status.HTTP_400_BAD_REQUEST)
