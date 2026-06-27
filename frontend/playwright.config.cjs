@@ -20,15 +20,26 @@ module.exports = defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  webServer: {
-    command: 'npm run dev -- --host 127.0.0.1 --port 3001 --strictPort',
-    url: baseURL,
-    reuseExistingServer: true,
-    env: {
-      ...process.env,
-      VITE_LOCAL_AUTH_BYPASS: process.env.VITE_LOCAL_AUTH_BYPASS || '1',
-      VITE_API_PROXY_TARGET: process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:8002',
+  webServer: [
+    {
+      command: 'cd ../backend && /home/felipe/proyectos/isosmart/backend/.venv312/bin/python manage.py runserver 127.0.0.1:18002',
+      url: 'http://127.0.0.1:18002/health',
+      reuseExistingServer: true,
+      env: {
+        ...process.env,
+      },
+      timeout: 120000,
     },
-    timeout: 120000,
-  },
+    {
+      command: 'npm run dev -- --host 127.0.0.1 --port 3001 --strictPort',
+      url: baseURL,
+      reuseExistingServer: true,
+      env: {
+        ...process.env,
+        VITE_LOCAL_AUTH_BYPASS: process.env.VITE_LOCAL_AUTH_BYPASS || '1',
+        VITE_API_PROXY_TARGET: process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:18002',
+      },
+      timeout: 120000,
+    },
+  ],
 });

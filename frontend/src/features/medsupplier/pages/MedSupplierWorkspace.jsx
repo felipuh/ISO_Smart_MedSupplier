@@ -200,6 +200,15 @@ const RecordForm = ({ fields, form, lookupOptions, onChange, onSubmit, onCancel,
   </form>
 );
 
+const hasPermission = (permissions, permissionName) => {
+  if (!permissionName) return true;
+  return Boolean(permissions?.permissions?.[permissionName]);
+};
+
+const filterPermittedFields = (fields, permissions) => (
+  (fields || []).filter((field) => hasPermission(permissions, field.requiresPermission))
+);
+
 const ProductModePanel = ({ status, loading, onRefresh }) => (
   <div className="space-y-4">
     <section className="rounded-lg border border-blue-200 bg-blue-50 p-5 dark:border-blue-900 dark:bg-blue-950/30">
@@ -265,6 +274,80 @@ const ProductModePanel = ({ status, loading, onRefresh }) => (
   </div>
 );
 
+const PrivateCockpitPanel = ({ data, loading, onRefresh }) => {
+  if (loading) {
+    return (
+      <div className="flex justify-center p-8">
+        <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-blue-500" />
+      </div>
+    );
+  }
+
+  const opportunity = data?.opportunities || {};
+  const finance = data?.finance || {};
+  const aging = data?.aging || {};
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-950 dark:text-white">Cockpit privado Supplier</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Pipeline, margen, forecast y aging comercial interno.</p>
+          </div>
+          <button type="button" onClick={onRefresh} className="btn-secondary">Actualizar</button>
+        </div>
+      </section>
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        {[
+          ['RFQs', opportunity.rfqs ?? 0],
+          ['Quotes pendientes', opportunity.quotes_pending ?? 0],
+          ['Órdenes abiertas', opportunity.orders_open ?? 0],
+          ['Margen promedio', `${finance.average_margin ?? '0.00'}%`],
+          ['Comisiones', finance.commission_total ?? '0.00'],
+          ['Quotes expiradas', aging.expired_quotes ?? 0],
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-sm text-slate-500 dark:text-slate-400">{label}</p>
+            <p className="mt-1 text-2xl font-semibold text-slate-950 dark:text-white">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+          <h3 className="font-semibold text-slate-950 dark:text-white">Forecast privado</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-slate-100 dark:bg-slate-800/60">
+              <tr>
+                {['Quote', 'Estado', 'Monto', 'Margen', 'Probabilidad', 'Validez'].map((label) => (
+                  <th key={label} className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">{label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+              {(data?.forecast || []).map((item) => (
+                <tr key={item.id}>
+                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{item.quote_number}</td>
+                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{item.status}</td>
+                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{item.total_amount}</td>
+                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{item.margin}</td>
+                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{item.forecast_probability}%</td>
+                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{formatCell(item.valid_until)}</td>
+                </tr>
+              ))}
+              {(!data?.forecast || data.forecast.length === 0) && <CrudEmptyState colSpan={6} message="No hay forecast privado en el scope activo." />}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+};
+
 const MedSupplierWorkspace = () => {
   const { sectionKey = 'accounts' } = useParams();
   const section = getMedSupplierSection(sectionKey);
@@ -275,13 +358,17 @@ const MedSupplierWorkspace = () => {
   const [loading, setLoading] = useState(Boolean(section.resource));
   const [integrationStatus, setIntegrationStatus] = useState(null);
   const [integrationLoading, setIntegrationLoading] = useState(false);
+  const [permissions, setPermissions] = useState(null);
+  const [cockpitData, setCockpitData] = useState(null);
+  const [cockpitLoading, setCockpitLoading] = useState(false);
   const [error, setError] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState(null);
-  const [form, setForm] = useState(() => buildInitialForm(section.formFields || []));
+  const permittedFields = useMemo(() => filterPermittedFields(section.formFields || [], permissions), [section.formFields, permissions]);
+  const [form, setForm] = useState(() => buildInitialForm(permittedFields));
   const [saving, setSaving] = useState(false);
   const [lookupOptions, setLookupOptions] = useState({});
-  const canMutate = Boolean(section.resource && section.formFields?.length);
+  const canMutate = Boolean(section.resource && permittedFields.length && permissions?.permissions?.can_mutate);
 
   const loadData = useCallback(async () => {
     if (!organizationId || !section.resource) {
@@ -305,6 +392,17 @@ const MedSupplierWorkspace = () => {
     }
   }, [organizationId, section.resource, section.label]);
 
+  const loadPermissions = useCallback(async () => {
+    if (!organizationId) return;
+    try {
+      const result = await medsupplierService.getPermissions(organizationId);
+      setPermissions(result);
+    } catch (err) {
+      console.error('Error loading MedSupplier permissions:', err);
+      setPermissions(null);
+    }
+  }, [organizationId]);
+
   const loadIntegrationStatus = useCallback(async () => {
     if (!organizationId || section.key !== 'integration') return;
 
@@ -321,6 +419,26 @@ const MedSupplierWorkspace = () => {
     }
   }, [organizationId, section.key]);
 
+  const loadPrivateCockpit = useCallback(async () => {
+    if (!organizationId || section.key !== 'cockpit') return;
+    try {
+      setCockpitLoading(true);
+      setError('');
+      const result = await medsupplierService.getPrivateCockpit(organizationId);
+      setCockpitData(result);
+    } catch (err) {
+      console.error('Error loading private cockpit:', err);
+      setError(extractApiError(err, 'No tienes acceso al cockpit privado.'));
+      setCockpitData(null);
+    } finally {
+      setCockpitLoading(false);
+    }
+  }, [organizationId, section.key]);
+
+  useEffect(() => {
+    loadPermissions();
+  }, [loadPermissions]);
+
   useEffect(() => {
     loadData();
   }, [loadData]);
@@ -330,7 +448,11 @@ const MedSupplierWorkspace = () => {
   }, [loadIntegrationStatus]);
 
   useEffect(() => {
-    const relationFields = (section.formFields || []).filter((field) => ['relation', 'multirelation'].includes(field.type));
+    loadPrivateCockpit();
+  }, [loadPrivateCockpit]);
+
+  useEffect(() => {
+    const relationFields = permittedFields.filter((field) => ['relation', 'multirelation'].includes(field.type));
     if (!organizationId || relationFields.length === 0) {
       setLookupOptions({});
       return;
@@ -364,29 +486,32 @@ const MedSupplierWorkspace = () => {
     return () => {
       mounted = false;
     };
-  }, [organizationId, section.formFields]);
+  }, [organizationId, permittedFields]);
 
   useEffect(() => {
     setIsFormOpen(false);
     setEditingRecord(null);
-    setForm(buildInitialForm(section.formFields || []));
-  }, [section.key, section.formFields]);
+    setForm(buildInitialForm(permittedFields));
+  }, [section.key, permittedFields]);
 
   const relatedSections = useMemo(() => (
-    medsupplierSections.filter((item) => item.key !== section.key).slice(0, 4)
-  ), [section.key]);
+    medsupplierSections
+      .filter((item) => item.key !== section.key)
+      .filter((item) => hasPermission(permissions, item.requiresPermission))
+      .slice(0, 4)
+  ), [section.key, permissions]);
 
   const Icon = section.icon;
 
   const openCreateForm = () => {
     setEditingRecord(null);
-    setForm(buildInitialForm(section.formFields || []));
+    setForm(buildInitialForm(permittedFields));
     setIsFormOpen(true);
   };
 
   const openEditForm = (record) => {
     setEditingRecord(record);
-    setForm(buildInitialForm(section.formFields || [], record));
+    setForm(buildInitialForm(permittedFields, record));
     setIsFormOpen(true);
   };
 
@@ -402,12 +527,12 @@ const MedSupplierWorkspace = () => {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    if (!organizationId || !section.resource || !section.formFields?.length) return;
+    if (!organizationId || !section.resource || !permittedFields.length) return;
 
     try {
       setSaving(true);
       setError('');
-      const payload = normalizePayload(section.formFields, form);
+      const payload = normalizePayload(permittedFields, form);
       if (editingRecord) {
         await medsupplierService.update(section.resource, organizationId, editingRecord.id, payload);
       } else {
@@ -445,11 +570,17 @@ const MedSupplierWorkspace = () => {
     if (!organizationId || !section.resource) return;
     const confirmed = window.confirm(workflowAction.confirm || `¿Ejecutar ${workflowAction.label}?`);
     if (!confirmed) return;
+    const requiresReason = ['approve', 'reject', 'close'].includes(workflowAction.action);
+    const reason = requiresReason ? window.prompt('Razón requerida para e-signature/audit trail:') : '';
+    if (requiresReason && !String(reason || '').trim()) {
+      setError('La razón es obligatoria para esta acción.');
+      return;
+    }
 
     try {
       setSaving(true);
       setError('');
-      await medsupplierService.runWorkflowAction(section.resource, organizationId, record.id, workflowAction.action);
+      await medsupplierService.runWorkflowAction(section.resource, organizationId, record.id, workflowAction.action, { reason });
       await loadData();
     } catch (err) {
       setError(extractApiError(err, `No se pudo ejecutar ${workflowAction.label}.`));
@@ -498,6 +629,12 @@ const MedSupplierWorkspace = () => {
           status={integrationStatus}
           loading={integrationLoading}
           onRefresh={loadIntegrationStatus}
+        />
+      ) : section.key === 'cockpit' ? (
+        <PrivateCockpitPanel
+          data={cockpitData}
+          loading={cockpitLoading}
+          onRefresh={loadPrivateCockpit}
         />
       ) : (
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -623,7 +760,7 @@ const MedSupplierWorkspace = () => {
         maxWidth="max-w-3xl"
       >
         <RecordForm
-          fields={section.formFields || []}
+          fields={permittedFields}
           form={form}
           lookupOptions={lookupOptions}
           onChange={updateFormValue}

@@ -25,30 +25,6 @@ class Command(BaseCommand):
                 'email': 'medsupplier-demo@smart3ai.local',
             },
         )
-        user_model = get_user_model()
-        user, user_created = user_model.objects.get_or_create(
-            email=options['user_email'],
-            defaults={
-                'username': options['user_email'].split('@')[0],
-                'first_name': 'MedSupplier',
-                'last_name': 'Demo',
-                'is_active': True,
-            },
-        )
-        if user_created:
-            user.set_password(options['user_password'])
-            user.save(update_fields=['password'])
-        UserProfile.objects.update_or_create(
-            user=user,
-            organization=org,
-            defaults={
-                'role': 'iso_manager',
-                'job_title': 'Supplier Quality Lead',
-                'department': 'Quality',
-                'is_active': True,
-            },
-        )
-
         today = timezone.now().date()
 
         account, _ = models.SupplierAccount.objects.update_or_create(
@@ -65,7 +41,7 @@ class Command(BaseCommand):
                 'status': 'active',
                 'risk_level': 'high',
                 'next_qbr_date': today.replace(day=28),
-                'visibility': 'shared',
+                'visibility': 'customer_shared',
             },
         )
 
@@ -80,9 +56,84 @@ class Command(BaseCommand):
                 'account_owner': 'Commercial Director',
                 'status': 'prospect',
                 'risk_level': 'medium',
-                'visibility': 'private',
+                'visibility': 'supplier_private',
             },
         )
+
+        user_model = get_user_model()
+
+        def ensure_demo_user(email, role, side, account_scope=None, first_name='MedSupplier', last_name='Demo'):
+            user, _ = user_model.objects.get_or_create(
+                email=email,
+                defaults={
+                    'username': email.split('@')[0],
+                    'first_name': first_name,
+                    'last_name': last_name,
+                    'is_active': True,
+                },
+            )
+            user.first_name = first_name
+            user.last_name = last_name
+            user.is_active = True
+            if hasattr(user, 'must_change_password'):
+                user.must_change_password = False
+            if hasattr(user, 'temporary_password_set_at'):
+                user.temporary_password_set_at = None
+            if hasattr(user, 'failed_login_attempts'):
+                user.failed_login_attempts = 0
+            if hasattr(user, 'account_locked_until'):
+                user.account_locked_until = None
+            update_fields = ['first_name', 'last_name', 'is_active']
+            if not user.check_password(options['user_password']):
+                user.set_password(options['user_password'])
+                update_fields.append('password')
+            for field_name in ['must_change_password', 'temporary_password_set_at', 'failed_login_attempts', 'account_locked_until']:
+                if hasattr(user, field_name):
+                    update_fields.append(field_name)
+            user.save(update_fields=update_fields)
+
+            profile_role = 'iso_manager' if side == 'supplier' else 'auditor'
+            UserProfile.objects.update_or_create(
+                user=user,
+                organization=org,
+                defaults={
+                    'role': profile_role,
+                    'job_title': role.replace('_', ' ').title(),
+                    'department': 'MedSupplier Demo',
+                    'is_active': True,
+                },
+            )
+            models.MedSupplierUserScope.objects.update_or_create(
+                user=user,
+                organization=org,
+                account=account_scope,
+                role=role,
+                defaults={
+                    'side': side,
+                    'is_active': True,
+                },
+            )
+            return user
+
+        user = ensure_demo_user(
+            options['user_email'],
+            'supplier_finance',
+            'supplier',
+            first_name='MedSupplier',
+            last_name='Finance Demo',
+        )
+        role_users = {
+            'supplier_admin': ensure_demo_user('medsupplier.supplier.admin@smart3ai.local', 'supplier_admin', 'supplier'),
+            'supplier_finance': user,
+            'supplier_quality': ensure_demo_user('medsupplier.supplier.quality@smart3ai.local', 'supplier_quality', 'supplier'),
+            'supplier_logistics': ensure_demo_user('medsupplier.supplier.logistics@smart3ai.local', 'supplier_logistics', 'supplier'),
+            'supplier_viewer': ensure_demo_user('medsupplier.supplier.viewer@smart3ai.local', 'supplier_viewer', 'supplier'),
+            'customer_admin': ensure_demo_user('medsupplier.customer.admin@smart3ai.local', 'customer_admin', 'customer', account),
+            'customer_buyer': ensure_demo_user('medsupplier.customer.buyer@smart3ai.local', 'customer_buyer', 'customer', account),
+            'customer_quality': ensure_demo_user('medsupplier.customer.quality@smart3ai.local', 'customer_quality', 'customer', account),
+            'customer_auditor': ensure_demo_user('medsupplier.customer.auditor@smart3ai.local', 'customer_auditor', 'customer', account),
+            'customer_viewer': ensure_demo_user('medsupplier.customer.viewer@smart3ai.local', 'customer_viewer', 'customer', account),
+        }
 
         contact, _ = models.SupplierContact.objects.update_or_create(
             organization=org,
@@ -95,7 +146,7 @@ class Command(BaseCommand):
                 'phone': '+1 555 0100',
                 'is_customer_user': True,
                 'is_active': True,
-                'visibility': 'shared',
+                'visibility': 'customer_shared',
             },
         )
 
@@ -109,7 +160,7 @@ class Command(BaseCommand):
                 'minutes': 'Customer requested tighter evidence package before next shipment release.',
                 'attendees': [contact.email],
                 'decisions': ['CAPA effectiveness evidence due before next QBR.'],
-                'visibility': 'shared',
+                'visibility': 'customer_shared',
             },
         )
 
@@ -123,7 +174,7 @@ class Command(BaseCommand):
                 'due_date': today,
                 'status': 'in_progress',
                 'description': 'Compilar investigacion, causa raiz, acciones y verificacion de efectividad.',
-                'visibility': 'shared',
+                'visibility': 'customer_shared',
             },
         )
 
@@ -139,7 +190,7 @@ class Command(BaseCommand):
                 'status': 'approved',
                 'effective_date': today,
                 'owner': 'Quality Systems',
-                'visibility': 'shared',
+                'visibility': 'regulated_evidence',
             },
         )
 
@@ -155,7 +206,7 @@ class Command(BaseCommand):
                 'confidentiality': 'controlled',
                 'owner': 'Document Control',
                 'effective_date': today,
-                'visibility': 'shared',
+                'visibility': 'regulated_evidence',
             },
         )
 
@@ -168,7 +219,7 @@ class Command(BaseCommand):
                 'checksum': 'demo-checksum-coc-b',
                 'approved_by': 'Quality Director',
                 'approved_at': timezone.now(),
-                'visibility': 'shared',
+                'visibility': 'customer_shared',
             },
         )
 
@@ -197,7 +248,37 @@ class Command(BaseCommand):
                 'total_amount': Decimal('48500.00'),
                 'valid_until': today,
                 'private_margin_notes': 'Margin review approved internally.',
-                'visibility': 'private',
+                'supplier_cost': Decimal('30500.00'),
+                'margin': Decimal('37.11'),
+                'commission': Decimal('1200.00'),
+                'advance': Decimal('5000.00'),
+                'forecast_probability': 85,
+                'internal_notes': 'Private supplier-side forecast and commercial terms.',
+                'visibility': 'customer_shared',
+            },
+        )
+        quote_line, _ = models.SupplierQuoteLine.objects.update_or_create(
+            organization=org,
+            quote=quote,
+            line_number=1,
+            defaults={
+                'account': account,
+                'rfq': rfq,
+                'product_code': 'STER-POUCH-XL',
+                'description': 'Sterile barrier pouch, XL',
+                'technical_description': 'Medical device sterile barrier packaging pilot line.',
+                'quantity': Decimal('12000.000'),
+                'uom': 'EA',
+                'moq': Decimal('10000.000'),
+                'lead_time_days': 28,
+                'incoterm': 'DAP',
+                'unit_price': Decimal('4.0417'),
+                'supplier_cost': Decimal('2.5417'),
+                'margin': Decimal('37.11'),
+                'currency': 'USD',
+                'customer_notes': 'Includes controlled release evidence package.',
+                'internal_notes': 'Cost basis approved by finance.',
+                'visibility': 'customer_shared',
             },
         )
 
@@ -212,7 +293,25 @@ class Command(BaseCommand):
                 'promised_ship_date': today,
                 'currency': 'USD',
                 'total_amount': Decimal('48500.00'),
-                'visibility': 'shared',
+                'visibility': 'customer_shared',
+            },
+        )
+        models.SupplierOrderLine.objects.update_or_create(
+            organization=org,
+            purchase_order=po,
+            line_number=1,
+            defaults={
+                'account': account,
+                'quote_line': quote_line,
+                'product_code': 'STER-POUCH-XL',
+                'description': 'Sterile barrier pouch, XL',
+                'quantity': Decimal('12000.000'),
+                'delivered_quantity': Decimal('0.000'),
+                'pending_quantity': Decimal('12000.000'),
+                'uom': 'EA',
+                'due_date': today,
+                'status': 'confirmed',
+                'visibility': 'customer_shared',
             },
         )
 
@@ -228,7 +327,7 @@ class Command(BaseCommand):
                 'uom': 'EA',
                 'manufactured_at': today,
                 'expiration_at': today.replace(year=today.year + 2),
-                'visibility': 'shared',
+                'visibility': 'customer_shared',
             },
         )
 
@@ -242,7 +341,21 @@ class Command(BaseCommand):
                 'carrier': 'DHL',
                 'tracking_number': 'DEMO-TRACK-0001',
                 'shipped_at': timezone.now(),
-                'visibility': 'shared',
+                'visibility': 'customer_shared',
+            },
+        )
+        models.SupplierShipmentMilestone.objects.update_or_create(
+            organization=org,
+            shipment=shipment,
+            milestone_type='ASN issued',
+            defaults={
+                'account': account,
+                'status': 'completed',
+                'expected_at': timezone.now(),
+                'actual_at': timezone.now(),
+                'carrier': 'DHL',
+                'tracking_number': shipment.tracking_number,
+                'visibility': 'customer_shared',
             },
         )
 
@@ -256,7 +369,7 @@ class Command(BaseCommand):
                 'result': 'accepted_with_deviation',
                 'inspected_by': 'Incoming Quality',
                 'findings': f'Lot {lot.lot_number} accepted with labeling deviation.',
-                'visibility': 'shared',
+                'visibility': 'customer_shared',
             },
         )
 
@@ -272,7 +385,7 @@ class Command(BaseCommand):
                 'title': 'Label traceability mismatch',
                 'description': 'Mismatch between pouch label revision and COC evidence package.',
                 'owner': 'Supplier Quality Lead',
-                'visibility': 'shared',
+                'visibility': 'customer_shared',
             },
         )
 
@@ -289,9 +402,65 @@ class Command(BaseCommand):
                 'owner': 'Quality Systems',
                 'due_date': today,
                 'effectiveness_result': 'Pending final shipment verification.',
-                'visibility': 'shared',
+                'evidence_summary': 'Release checklist, document review, and shipment verification evidence available.',
+                'visibility': 'customer_shared',
             },
         )
+        fmea, _ = models.SupplierFMEA.objects.update_or_create(
+            organization=org,
+            fmea_number='FMEA-CN-STER-001',
+            defaults={
+                'account': account,
+                'title': 'Sterile pouch packaging process FMEA',
+                'process': 'Packaging and release',
+                'status': 'active',
+                'owner': 'Supplier Quality Lead',
+                'review_due_date': today,
+                'visibility': 'customer_shared',
+            },
+        )
+        models.SupplierFMEAItem.objects.update_or_create(
+            organization=org,
+            fmea=fmea,
+            failure_mode='Label revision mismatch',
+            defaults={
+                'account': account,
+                'quality_event': quality_event,
+                'hazard': 'Incorrect released documentation',
+                'cause': 'Manual handoff missed document revision check.',
+                'effect': 'COC evidence mismatch at customer receiving.',
+                'severity': 4,
+                'occurrence': 3,
+                'detection': 2,
+                'mitigation': 'Independent release checklist verification.',
+                'owner': 'Quality Systems',
+                'status': 'mitigating',
+                'visibility': 'customer_shared',
+            },
+        )
+        evidence_package, _ = models.EvidencePackage.objects.update_or_create(
+            organization=org,
+            package_number='EP-CN-0001',
+            defaults={
+                'account': account,
+                'title': 'CAPA and release evidence package',
+                'scope': 'CAPA / shipment release',
+                'date_from': today.replace(day=1),
+                'date_to': today,
+                'status': 'prepared',
+                'generated_by': user,
+                'generated_at': timezone.now(),
+                'visibility': 'regulated_evidence',
+            },
+        )
+        models.EvidencePackageEntry.objects.update_or_create(
+            package=evidence_package,
+            object_type='suppliercapa',
+            object_id='CAPA-CN-0001',
+            defaults={'label': 'CAPA evidence summary'},
+        )
+        evidence_package.checksum = evidence_package.calculate_checksum()
+        evidence_package.save(update_fields=['checksum'])
 
         models.SupplierScorecard.objects.update_or_create(
             organization=org,
@@ -304,7 +473,7 @@ class Command(BaseCommand):
                 'responsiveness_score': Decimal('95.00'),
                 'overall_score': Decimal('91.67'),
                 'qbr_notes': 'Strong responsiveness; quality trend needs CAPA closure evidence.',
-                'visibility': 'shared',
+                'visibility': 'customer_shared',
             },
         )
 

@@ -317,6 +317,11 @@ class AdminAppsClient:
                     'name': 'Process Mapper',
                     'enabled': ai_spm_enabled,
                 },
+                {
+                    'code': 'MEDSUPPLIER',
+                    'name': 'ISO Smart MedSupplier',
+                    'enabled': True,
+                },
             ]
             
             return {

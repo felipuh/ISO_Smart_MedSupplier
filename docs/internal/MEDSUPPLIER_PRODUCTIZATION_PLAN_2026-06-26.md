@@ -6,6 +6,26 @@ ISO Smart MedSupplier tiene backend, modelo de datos, APIs REST, seguridad por o
 
 La prioridad deja de ser cosmetica o lint aislado. El foco inmediato es convertir el workspace en un producto usable por operaciones, calidad, supply chain y customer-facing teams.
 
+## Auditoria baseline de validacion
+
+La linea base oficial para comparar avance hasta aceptacion 100% queda documentada en:
+
+- `docs/internal/MEDSUPPLIER_VALIDATION_AUDIT_BASELINE_2026-06-26.md`
+
+Resultado baseline:
+
+- Cumplimiento estimado: 62%.
+- Estado global: Parcial.
+- Estado comercial: demo/controlado, no listo para venta enterprise regulada completa.
+- Bloqueos P0: RBAC/ABAC de negocio incompleto, riesgo de exposicion de informacion comercial privada por serializers amplios, separacion shared/private insuficiente y migraciones pendientes fuera de MedSupplier.
+
+Regla de avance:
+
+1. Ningun bloque se considera cerrado sin evidencia en codigo, migraciones, tests, endpoints, UI o documentacion formal.
+2. Despues de cada bloque natural se debe actualizar la matriz `MS-*` de la auditoria.
+3. No se puede declarar 100% mientras exista un P0 abierto.
+4. Cada mejora debe registrar QA ejecutado y riesgo residual en la bitacora de comparacion.
+
 ## Criterio de producto vendible
 
 Cada modulo operativo debe cumplir:

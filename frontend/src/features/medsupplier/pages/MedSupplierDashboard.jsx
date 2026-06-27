@@ -56,6 +56,7 @@ const MedSupplierDashboard = () => {
   const organizationId = currentOrganization?.id;
   const [summary, setSummary] = useState(null);
   const [accounts, setAccounts] = useState([]);
+  const [permissions, setPermissions] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -64,12 +65,14 @@ const MedSupplierDashboard = () => {
     try {
       setLoading(true);
       setError('');
-      const [summaryData, accountData] = await Promise.all([
+      const [summaryData, accountData, permissionData] = await Promise.all([
         medsupplierService.getSummary(organizationId),
         medsupplierService.getAccounts(organizationId, { ordering: 'name' }),
+        medsupplierService.getPermissions(organizationId),
       ]);
       setSummary(summaryData);
       setAccounts(accountData);
+      setPermissions(permissionData);
     } catch (err) {
       console.error('Error loading ISO Smart MedSupplier:', err);
       setError('No se pudo cargar ISO Smart MedSupplier.');
@@ -96,6 +99,12 @@ const MedSupplierDashboard = () => {
     'Scorecard/QBR',
   ]), []);
 
+  const visibleSections = useMemo(() => (
+    medsupplierSections.filter((section) => (
+      !section.requiresPermission || permissions?.permissions?.[section.requiresPermission]
+    ))
+  ), [permissions]);
+
   if (loading) {
     return (
       <div className="flex justify-center p-8">
@@ -108,7 +117,7 @@ const MedSupplierDashboard = () => {
     <div className="space-y-6">
       <CrudPageHeader
         title="ISO Smart MedSupplier"
-        subtitle="Torre de control regulada Supplier-Customer para clientes de Medical Devices y empresas transnacionales."
+        subtitle={`Torre de control regulada Supplier-Customer. Vista activa: ${permissions?.side || summary?.side || 'scope'} / ${permissions?.role || summary?.role || 'rol pendiente'}.`}
       />
 
       <CrudErrorBanner message={error} onClose={() => setError('')} />
@@ -161,7 +170,7 @@ const MedSupplierDashboard = () => {
           <h2 className="text-lg font-semibold text-slate-950 dark:text-white">Workspace MedSupplier</h2>
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {medsupplierSections.filter((section) => section.key !== 'accounts').slice(0, 12).map((section) => {
+          {visibleSections.filter((section) => section.key !== 'accounts').slice(0, 12).map((section) => {
             const SectionIcon = section.icon;
             return (
               <Link

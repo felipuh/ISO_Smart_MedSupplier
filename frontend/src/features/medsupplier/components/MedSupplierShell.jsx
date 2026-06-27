@@ -1,13 +1,43 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { LogOut, Moon, Sun } from 'lucide-react';
 import { medsupplierSections } from '../medsupplierSections';
 import { useAuth } from '../../../context/AuthContext';
 import { useTheme } from '../../../context/ThemeContext';
+import medsupplierService from '../../../services/medsupplierService';
+
+const hasSectionAccess = (section, permissions) => {
+  if (!section.requiresPermission) return true;
+  return Boolean(permissions?.permissions?.[section.requiresPermission]);
+};
 
 const MedSupplierShell = () => {
   const { currentOrganization, logout, user } = useAuth();
   const { isDark, toggleTheme } = useTheme();
+  const [permissions, setPermissions] = useState(null);
+  const organizationId = currentOrganization?.id;
+
+  useEffect(() => {
+    let mounted = true;
+    if (!organizationId) return () => {
+      mounted = false;
+    };
+
+    medsupplierService.getPermissions(organizationId)
+      .then((result) => {
+        if (mounted) setPermissions(result);
+      })
+      .catch((error) => {
+        console.error('Error loading MedSupplier permissions:', error);
+        if (mounted) setPermissions(null);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [organizationId]);
+
+  const visibleSections = medsupplierSections.filter((item) => hasSectionAccess(item, permissions));
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-white">
@@ -20,7 +50,7 @@ const MedSupplierShell = () => {
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-          {medsupplierSections.map((item) => {
+          {visibleSections.map((item) => {
             const Icon = item.icon;
             const to = item.key === 'accounts' ? '/medsupplier/accounts' : `/medsupplier/${item.key}`;
             return (
@@ -43,6 +73,7 @@ const MedSupplierShell = () => {
         <div className="border-t border-slate-200 p-4 dark:border-slate-800">
           <p className="truncate text-sm font-semibold">{currentOrganization?.name || 'Sin organización'}</p>
           <p className="truncate text-xs text-slate-500 dark:text-slate-400">{user?.email}</p>
+          <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{permissions?.role || 'Permisos MedSupplier'}</p>
         </div>
       </aside>
 

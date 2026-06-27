@@ -1,7 +1,10 @@
 from decimal import Decimal
+import csv
+from io import StringIO
 from django.conf import settings
 from django.db.models import Avg, Count
 from django.forms.models import model_to_dict
+from django.http import HttpResponse
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -14,9 +17,17 @@ from core.organization_scoping import OrganizationScopedViewSetMixin
 from integration.client import admin_apps_client
 
 from . import models, serializers
+from .permissions import (
+    PRIVATE_VISIBILITIES,
+    assert_can_mutate,
+    assert_object_allowed,
+    filter_queryset_for_context,
+    resolve_medsupplier_context,
+)
 
 
 PRIVATE_VISIBLE_ROLES = ['org_admin', 'iso_manager', 'user']
+SENSITIVE_ACTIONS = {'approve', 'reject', 'close', 'export', 'prepare', 'status_change'}
 
 
 def _request_ip_address(request):
@@ -43,7 +54,11 @@ def _snapshot(instance):
     values = model_to_dict(instance)
     values['id'] = instance.pk
     values['organization'] = getattr(instance, 'organization_id', None)
-    return {key: _safe_value(value) for key, value in values.items()}
+    hidden = {
+        'private_margin_notes', 'supplier_cost', 'margin', 'commission',
+        'advance', 'internal_notes',
+    }
+    return {key: _safe_value(value) for key, value in values.items() if key not in hidden}
 
 
 def _record_account(instance):
@@ -62,7 +77,7 @@ def _record_label(instance):
     for field in (
         'account_code', 'full_name', 'title', 'requirement_id', 'document_number',
         'rfq_number', 'quote_number', 'po_number', 'lot_number', 'shipment_number',
-        'inspection_number', 'event_number', 'capa_number',
+        'inspection_number', 'event_number', 'capa_number', 'fmea_number', 'package_number',
     ):
         value = getattr(instance, field, None)
         if value:
@@ -78,28 +93,29 @@ class MedSupplierCanEdit(permissions.BasePermission):
             return False
         if request.method in permissions.SAFE_METHODS:
             return True
-
-        role = getattr(request, 'user_role', None)
-        if role:
-            return role in ['org_admin', 'iso_manager', 'user']
-
-        organization_id = (
-            request.query_params.get('organization_id')
-            or request.query_params.get('organization')
-            or getattr(request, 'organization_id', None)
-        )
-        if not organization_id:
+        try:
+            organization_id = (
+                request.query_params.get('organization_id')
+                or request.query_params.get('organization')
+                or getattr(request, 'organization_id', None)
+            )
+            context = resolve_medsupplier_context(request.user, organization_id)
+            return context.can_mutate and context.is_supplier
+        except Exception:
             return False
-        return UserProfile.objects.filter(
-            user=request.user,
-            organization_id=organization_id,
-            role__in=['org_admin', 'iso_manager', 'user'],
-            is_active=True,
-        ).exists()
 
 
 class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, MedSupplierCanEdit]
+
+    def get_medsupplier_context(self):
+        organization_id = self.get_organization_id()
+        return resolve_medsupplier_context(self.request.user, organization_id)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['medsupplier_context'] = self.get_medsupplier_context()
+        return context
 
     def _user_role(self, organization_id):
         role = getattr(self.request, 'user_role', None)
@@ -114,29 +130,17 @@ class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelVie
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        organization_id = self.get_organization_id()
-        role = self._user_role(organization_id)
-        if role in PRIVATE_VISIBLE_ROLES or self.request.user.is_superuser:
-            return queryset
-        model = getattr(queryset, 'model', None)
-        if model and any(field.name == 'visibility' for field in model._meta.fields):
-            return queryset.filter(visibility='shared')
-        return queryset
+        return filter_queryset_for_context(queryset, self.get_medsupplier_context())
 
     def get_organization_id(self):
         organization_id = super().get_organization_id()
-        if self.request.user.is_superuser:
-            return organization_id
-        if not UserProfile.objects.filter(
-            user=self.request.user,
-            organization_id=organization_id,
-            is_active=True,
-        ).exists():
-            raise PermissionDenied('No tienes acceso a esta organización')
+        resolve_medsupplier_context(self.request.user, organization_id)
         return organization_id
 
     def perform_create(self, serializer):
         organization_id = self.get_organization_id()
+        context = self.get_medsupplier_context()
+        assert_can_mutate(context)
         instance = serializer.save(
             organization_id=organization_id,
             created_by=self.request.user,
@@ -146,31 +150,62 @@ class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelVie
 
     def perform_update(self, serializer):
         self.get_organization_id()
+        context = self.get_medsupplier_context()
+        assert_can_mutate(context)
+        assert_object_allowed(serializer.instance, context)
         old_values = _snapshot(serializer.instance)
         instance = serializer.save(updated_by=self.request.user)
         self._create_audit_event(instance, 'update', old_values=old_values, new_values=_snapshot(instance))
 
     def perform_destroy(self, instance):
+        context = self.get_medsupplier_context()
+        assert_can_mutate(context)
+        assert_object_allowed(instance, context)
         old_values = _snapshot(instance)
         self._create_audit_event(instance, 'delete', old_values=old_values)
         instance.delete()
 
-    def _create_audit_event(self, instance, action, old_values=None, new_values=None):
-        models.MedSupplierAuditEvent.objects.create(
+    def _create_audit_event(self, instance, action, old_values=None, new_values=None, reason=''):
+        return models.MedSupplierAuditEvent.objects.create(
             organization_id=instance.organization_id,
             account=_record_account(instance),
             user=self.request.user if self.request.user.is_authenticated else None,
             action=action,
             record_type=instance._meta.model_name,
             record_id=str(instance.pk),
+            object_type=instance._meta.label_lower,
+            object_id=str(instance.pk),
             description=f'{action} {_record_label(instance)}',
+            reason=reason or '',
             old_values=old_values or {},
             new_values=new_values or {},
             ip_address=_request_ip_address(self.request),
             user_agent=self.request.META.get('HTTP_USER_AGENT', ''),
         )
 
-    def _apply_business_update(self, instance, updates, description=None):
+    def _require_reason(self):
+        reason = (self.request.data.get('reason') or '').strip()
+        if not reason:
+            raise ValidationError({'reason': 'La razón es obligatoria para acciones sensibles/e-signature.'})
+        return reason
+
+    def _create_esignature(self, instance, meaning, reason):
+        return models.MedSupplierESignature.objects.create(
+            organization_id=instance.organization_id,
+            account=_record_account(instance),
+            user=self.request.user,
+            meaning=meaning,
+            reason=reason,
+            object_type=instance._meta.label_lower,
+            object_id=str(instance.pk),
+            ip_address=_request_ip_address(self.request),
+            user_agent=self.request.META.get('HTTP_USER_AGENT', ''),
+        )
+
+    def _apply_business_update(self, instance, updates, description=None, reason='', signature_meaning='status_change'):
+        context = self.get_medsupplier_context()
+        assert_can_mutate(context)
+        assert_object_allowed(instance, context)
         old_values = _snapshot(instance)
         for field, value in updates.items():
             setattr(instance, field, value)
@@ -182,7 +217,10 @@ class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelVie
             'status_change',
             old_values=old_values,
             new_values=_snapshot(instance),
+            reason=reason,
         )
+        if reason:
+            self._create_esignature(instance, signature_meaning, reason)
         if description:
             latest = models.MedSupplierAuditEvent.objects.filter(
                 organization=instance.organization,
@@ -198,34 +236,23 @@ class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelVie
 class ReadOnlyMedSupplierViewSet(OrganizationScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_medsupplier_context(self):
+        organization_id = self.get_organization_id()
+        return resolve_medsupplier_context(self.request.user, organization_id)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['medsupplier_context'] = self.get_medsupplier_context()
+        return context
+
     def get_organization_id(self):
         organization_id = super().get_organization_id()
-        if self.request.user.is_superuser:
-            return organization_id
-        if not UserProfile.objects.filter(
-            user=self.request.user,
-            organization_id=organization_id,
-            is_active=True,
-        ).exists():
-            raise PermissionDenied('No tienes acceso a esta organización')
+        resolve_medsupplier_context(self.request.user, organization_id)
         return organization_id
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        organization_id = self.get_organization_id()
-        role = getattr(self.request, 'user_role', None)
-        if not role:
-            profile = UserProfile.objects.filter(
-                user=self.request.user,
-                organization_id=organization_id,
-                is_active=True,
-            ).first()
-            role = profile.role if profile else None
-        if role in PRIVATE_VISIBLE_ROLES or self.request.user.is_superuser:
-            return queryset
-        if queryset.model is models.MedSupplierAuditEvent:
-            return queryset.filter(account__visibility='shared')
-        return queryset
+        return filter_queryset_for_context(queryset, self.get_medsupplier_context())
 
 
 class SupplierAccountViewSet(MedSupplierScopedViewSet):
@@ -323,6 +350,7 @@ class SupplierDocumentViewSet(MedSupplierScopedViewSet):
 
     @action(detail=True, methods=['post'], url_path='approve')
     def approve(self, request, pk=None):
+        reason = self._require_reason()
         document = self.get_object()
         if document.status == 'obsolete':
             raise ValidationError({'status': 'No se puede aprobar un documento obsoleto.'})
@@ -332,7 +360,13 @@ class SupplierDocumentViewSet(MedSupplierScopedViewSet):
             'status': 'effective',
             'effective_date': document.effective_date or timezone.now().date(),
         }
-        document = self._apply_business_update(document, updates, f'approve document {_record_label(document)}')
+        document = self._apply_business_update(
+            document,
+            updates,
+            f'approve document {_record_label(document)}',
+            reason=reason,
+            signature_meaning='approval',
+        )
         return Response(self.get_serializer(document).data)
 
 
@@ -366,21 +400,44 @@ class SupplierQuoteViewSet(MedSupplierScopedViewSet):
 
     @action(detail=True, methods=['post'], url_path='approve')
     def approve(self, request, pk=None):
+        reason = self._require_reason()
         quote = self.get_object()
         if quote.status in ['approved', 'rejected', 'expired']:
             raise ValidationError({'status': 'La cotizacion no se puede aprobar desde su estado actual.'})
         if quote.valid_until and quote.valid_until < timezone.now().date():
             raise ValidationError({'valid_until': 'No se puede aprobar una cotizacion expirada.'})
-        quote = self._apply_business_update(quote, {'status': 'approved'}, f'approve quote {_record_label(quote)}')
+        if not quote.lines.exists():
+            raise ValidationError({'lines': 'No se puede aprobar una cotización sin líneas.'})
+        quote = self._apply_business_update(
+            quote,
+            {'status': 'approved'},
+            f'approve quote {_record_label(quote)}',
+            reason=reason,
+            signature_meaning='approval',
+        )
         return Response(self.get_serializer(quote).data)
 
     @action(detail=True, methods=['post'], url_path='reject')
     def reject(self, request, pk=None):
+        reason = self._require_reason()
         quote = self.get_object()
         if quote.status in ['approved', 'rejected', 'expired']:
             raise ValidationError({'status': 'La cotizacion no se puede rechazar desde su estado actual.'})
-        quote = self._apply_business_update(quote, {'status': 'rejected'}, f'reject quote {_record_label(quote)}')
+        quote = self._apply_business_update(
+            quote,
+            {'status': 'rejected'},
+            f'reject quote {_record_label(quote)}',
+            reason=reason,
+            signature_meaning='status_change',
+        )
         return Response(self.get_serializer(quote).data)
+
+
+class SupplierQuoteLineViewSet(MedSupplierScopedViewSet):
+    queryset = models.SupplierQuoteLine.objects.select_related('account', 'quote', 'rfq')
+    serializer_class = serializers.SupplierQuoteLineSerializer
+    filterset_fields = ['account', 'quote', 'rfq', 'visibility']
+    search_fields = ['product_code', 'description', 'technical_description', 'customer_notes', 'internal_notes']
 
 
 class SupplierPurchaseOrderViewSet(MedSupplierScopedViewSet):
@@ -391,6 +448,7 @@ class SupplierPurchaseOrderViewSet(MedSupplierScopedViewSet):
 
     @action(detail=True, methods=['post'], url_path='close')
     def close(self, request, pk=None):
+        reason = self._require_reason()
         purchase_order = self.get_object()
         if purchase_order.status in ['closed', 'cancelled']:
             raise ValidationError({'status': 'La orden no se puede cerrar desde su estado actual.'})
@@ -398,8 +456,17 @@ class SupplierPurchaseOrderViewSet(MedSupplierScopedViewSet):
             purchase_order,
             {'status': 'closed'},
             f'close PO {_record_label(purchase_order)}',
+            reason=reason,
+            signature_meaning='closure',
         )
         return Response(self.get_serializer(purchase_order).data)
+
+
+class SupplierOrderLineViewSet(MedSupplierScopedViewSet):
+    queryset = models.SupplierOrderLine.objects.select_related('account', 'purchase_order', 'quote_line')
+    serializer_class = serializers.SupplierOrderLineSerializer
+    filterset_fields = ['account', 'purchase_order', 'quote_line', 'status', 'visibility']
+    search_fields = ['product_code', 'description', 'discrepancy_notes']
 
 
 class SupplierLotViewSet(MedSupplierScopedViewSet):
@@ -414,6 +481,13 @@ class SupplierShipmentViewSet(MedSupplierScopedViewSet):
     serializer_class = serializers.SupplierShipmentSerializer
     filterset_fields = ['account', 'purchase_order', 'status', 'visibility']
     search_fields = ['shipment_number', 'carrier', 'tracking_number']
+
+
+class SupplierShipmentMilestoneViewSet(MedSupplierScopedViewSet):
+    queryset = models.SupplierShipmentMilestone.objects.select_related('account', 'shipment')
+    serializer_class = serializers.SupplierShipmentMilestoneSerializer
+    filterset_fields = ['account', 'shipment', 'status', 'milestone_type', 'visibility']
+    search_fields = ['milestone_type', 'carrier', 'tracking_number', 'incident_notes', 'delay_reason']
 
 
 class SupplierInspectionViewSet(MedSupplierScopedViewSet):
@@ -431,6 +505,7 @@ class SupplierQualityEventViewSet(MedSupplierScopedViewSet):
 
     @action(detail=True, methods=['post'], url_path='close')
     def close(self, request, pk=None):
+        reason = self._require_reason()
         quality_event = self.get_object()
         if quality_event.status == 'closed':
             raise ValidationError({'status': 'El evento de calidad ya esta cerrado.'})
@@ -440,6 +515,8 @@ class SupplierQualityEventViewSet(MedSupplierScopedViewSet):
             quality_event,
             {'status': 'closed'},
             f'close quality event {_record_label(quality_event)}',
+            reason=reason,
+            signature_meaning='closure',
         )
         return Response(self.get_serializer(quality_event).data)
 
@@ -452,13 +529,43 @@ class SupplierCAPAViewSet(MedSupplierScopedViewSet):
 
     @action(detail=True, methods=['post'], url_path='close')
     def close(self, request, pk=None):
+        reason = self._require_reason()
         capa = self.get_object()
         if capa.status in ['closed', 'cancelled']:
             raise ValidationError({'status': 'La CAPA no se puede cerrar desde su estado actual.'})
+        missing = {}
+        if not (capa.root_cause or '').strip():
+            missing['root_cause'] = 'Se requiere causa raíz para cerrar la CAPA.'
+        if not ((capa.corrective_action or '').strip() or (capa.preventive_action or '').strip()):
+            missing['corrective_action'] = 'Se requiere acción correctiva o preventiva para cerrar la CAPA.'
         if not (capa.effectiveness_result or '').strip():
-            raise ValidationError({'effectiveness_result': 'Se requiere resultado de efectividad para cerrar la CAPA.'})
-        capa = self._apply_business_update(capa, {'status': 'closed'}, f'close CAPA {_record_label(capa)}')
+            missing['effectiveness_result'] = 'Se requiere resultado de efectividad para cerrar la CAPA.'
+        if not (capa.evidence_summary or '').strip():
+            missing['evidence_summary'] = 'Se requiere evidencia o resumen de evidencia para cerrar la CAPA.'
+        if missing:
+            raise ValidationError(missing)
+        capa = self._apply_business_update(
+            capa,
+            {'status': 'closed'},
+            f'close CAPA {_record_label(capa)}',
+            reason=reason,
+            signature_meaning='closure',
+        )
         return Response(self.get_serializer(capa).data)
+
+
+class SupplierFMEAViewSet(MedSupplierScopedViewSet):
+    queryset = models.SupplierFMEA.objects.select_related('account')
+    serializer_class = serializers.SupplierFMEASerializer
+    filterset_fields = ['account', 'status', 'visibility']
+    search_fields = ['fmea_number', 'title', 'process', 'owner', 'notes']
+
+
+class SupplierFMEAItemViewSet(MedSupplierScopedViewSet):
+    queryset = models.SupplierFMEAItem.objects.select_related('account', 'fmea', 'quality_event', 'capa', 'document')
+    serializer_class = serializers.SupplierFMEAItemSerializer
+    filterset_fields = ['account', 'fmea', 'status', 'visibility']
+    search_fields = ['hazard', 'failure_mode', 'cause', 'effect', 'mitigation', 'residual_risk']
 
 
 class SupplierScorecardViewSet(MedSupplierScopedViewSet):
@@ -473,6 +580,112 @@ class MedSupplierAuditEventViewSet(ReadOnlyMedSupplierViewSet):
     filterset_fields = ['account', 'action', 'record_type']
     search_fields = ['description', 'reason', 'record_type', 'record_id']
 
+    @action(detail=False, methods=['get'], url_path='export')
+    def export(self, request):
+        export_format = request.query_params.get('format', 'json').lower()
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset[:1000], many=True)
+        if export_format == 'csv':
+            output = StringIO()
+            writer = csv.writer(output)
+            writer.writerow(['created_at', 'action', 'record_type', 'record_id', 'description', 'reason', 'event_hash'])
+            for event in queryset[:1000]:
+                writer.writerow([
+                    event.created_at.isoformat(), event.action, event.record_type,
+                    event.record_id, event.description, event.reason, event.event_hash,
+                ])
+            response = HttpResponse(output.getvalue(), content_type='text/csv')
+            response['Content-Disposition'] = 'attachment; filename="medsupplier-audit-events.csv"'
+            return response
+        return Response({'count': queryset.count(), 'results': serializer.data})
+
+
+class MedSupplierESignatureViewSet(ReadOnlyMedSupplierViewSet):
+    queryset = models.MedSupplierESignature.objects.select_related('account', 'user')
+    serializer_class = serializers.MedSupplierESignatureSerializer
+    filterset_fields = ['account', 'meaning', 'object_type', 'object_id']
+    search_fields = ['reason', 'object_type', 'object_id']
+
+
+class EvidencePackageViewSet(MedSupplierScopedViewSet):
+    queryset = models.EvidencePackage.objects.select_related('account', 'generated_by').prefetch_related('entries')
+    serializer_class = serializers.EvidencePackageSerializer
+    filterset_fields = ['account', 'status', 'visibility']
+    search_fields = ['package_number', 'title', 'scope']
+
+    @action(detail=True, methods=['post'], url_path='prepare')
+    def prepare(self, request, pk=None):
+        package = self.get_object()
+        if not package.entries.exists():
+            raise ValidationError({'entries': 'No se puede preparar un evidence package vacío.'})
+        package.generated_by = request.user
+        package.generated_at = timezone.now()
+        package.status = 'prepared'
+        package.checksum = package.calculate_checksum()
+        package.updated_by = request.user
+        package.save(update_fields=['generated_by', 'generated_at', 'status', 'checksum', 'updated_by', 'updated_at'])
+        self._create_audit_event(package, 'status_change', new_values=_snapshot(package), reason='Evidence package prepared')
+        return Response(self.get_serializer(package).data)
+
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        reason = self._require_reason()
+        package = self.get_object()
+        if not package.entries.exists():
+            raise ValidationError({'entries': 'No se puede aprobar un evidence package vacío.'})
+        package = self._apply_business_update(
+            package,
+            {
+                'status': 'approved',
+                'generated_by': request.user,
+                'generated_at': package.generated_at or timezone.now(),
+                'checksum': package.calculate_checksum(),
+            },
+            f'approve evidence package {_record_label(package)}',
+            reason=reason,
+            signature_meaning='approval',
+        )
+        return Response(self.get_serializer(package).data)
+
+    @action(detail=True, methods=['get'], url_path='export')
+    def export(self, request, pk=None):
+        package = self.get_object()
+        if not package.entries.exists():
+            raise ValidationError({'entries': 'No se puede exportar un evidence package vacío.'})
+        data = self.get_serializer(package).data
+        self._create_audit_event(package, 'export', new_values={'package': data}, reason='Evidence package export')
+        return Response(data)
+
+
+class EvidencePackageEntryViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated, MedSupplierCanEdit]
+    queryset = models.EvidencePackageEntry.objects.select_related('package', 'package__account')
+    serializer_class = serializers.EvidencePackageEntrySerializer
+    filterset_fields = ['package', 'object_type', 'object_id']
+
+    def get_organization_id(self):
+        value = self.request.query_params.get('organization_id') or getattr(self.request, 'organization_id', None)
+        if not value:
+            raise ValidationError({'organization_id': 'organization_id requerido'})
+        return int(value)
+
+    def get_medsupplier_context(self):
+        return resolve_medsupplier_context(self.request.user, self.get_organization_id())
+
+    def get_queryset(self):
+        queryset = super().get_queryset().filter(package__organization_id=self.get_organization_id())
+        context = self.get_medsupplier_context()
+        if context.is_customer:
+            queryset = queryset.filter(package__account_id__in=context.account_ids)
+        return queryset
+
+    def perform_create(self, serializer):
+        package = serializer.validated_data['package']
+        context = self.get_medsupplier_context()
+        assert_can_mutate(context)
+        assert_object_allowed(package, context)
+        serializer.save()
+
 
 def _resolve_organization_id(request):
     value = request.query_params.get('organization_id') or getattr(request, 'organization_id', None)
@@ -482,9 +695,11 @@ def _resolve_organization_id(request):
 
 
 def _user_can_access_organization(user, organization_id):
-    if user.is_superuser:
+    try:
+        resolve_medsupplier_context(user, organization_id)
         return True
-    return UserProfile.objects.filter(user=user, organization_id=organization_id, is_active=True).exists()
+    except PermissionDenied:
+        return False
 
 
 def _get_user_profile(user, organization_id):
@@ -497,43 +712,117 @@ def _get_user_profile(user, organization_id):
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
+def effective_permissions(request):
+    organization_id = _resolve_organization_id(request)
+    if not organization_id:
+        return Response({'organization_id': 'organization_id requerido'}, status=400)
+    context = resolve_medsupplier_context(request.user, organization_id)
+    return Response({
+        'organization_id': context.organization_id,
+        'side': context.side,
+        'role': context.role,
+        'account_ids': list(context.account_ids),
+        'source': context.source,
+        'permissions': {
+            'can_mutate': context.can_mutate,
+            'can_view_private_financials': context.can_view_private_financials,
+            'can_access_supplier_cockpit': context.can_access_supplier_cockpit,
+            'is_read_only': context.is_read_only,
+        },
+        'visible_visibilities': sorted(context.visible_visibilities),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
 def dashboard_summary(request):
     organization_id = _resolve_organization_id(request)
     if not organization_id:
         return Response({'organization_id': 'organization_id requerido'}, status=400)
-    if not _user_can_access_organization(request.user, organization_id):
-        return Response({'detail': 'No tienes acceso a esta organización'}, status=403)
+    context = resolve_medsupplier_context(request.user, organization_id)
 
-    accounts = models.SupplierAccount.objects.filter(organization_id=organization_id)
-    quality_events = models.SupplierQualityEvent.objects.filter(organization_id=organization_id)
-    actions = models.SupplierAction.objects.filter(organization_id=organization_id)
-    scorecards = models.SupplierScorecard.objects.filter(organization_id=organization_id)
+    accounts = filter_queryset_for_context(models.SupplierAccount.objects.all(), context)
+    quality_events = filter_queryset_for_context(models.SupplierQualityEvent.objects.all(), context)
+    actions = filter_queryset_for_context(models.SupplierAction.objects.all(), context)
+    scorecards = filter_queryset_for_context(models.SupplierScorecard.objects.all(), context)
+    rfqs = filter_queryset_for_context(models.SupplierRFQ.objects.all(), context)
+    purchase_orders = filter_queryset_for_context(models.SupplierPurchaseOrder.objects.all(), context)
+    shipments = filter_queryset_for_context(models.SupplierShipment.objects.all(), context)
+    quotes = filter_queryset_for_context(models.SupplierQuote.objects.all(), context)
 
     return Response({
         'product': 'ISO Smart MedSupplier',
         'value_proposition': 'Torre de control regulada Supplier-Customer para clientes de Medical Devices y empresas transnacionales.',
         'organization_id': organization_id,
+        'role': context.role,
+        'side': context.side,
         'accounts': accounts.count(),
         'active_accounts': accounts.filter(status='active').count(),
         'open_actions': actions.exclude(status='closed').count(),
         'open_quality_events': quality_events.exclude(status='closed').count(),
         'overdue_actions': actions.exclude(status='closed').filter(due_date__lt=timezone.now().date()).count(),
-        'rfqs': models.SupplierRFQ.objects.filter(organization_id=organization_id).count(),
-        'purchase_orders': models.SupplierPurchaseOrder.objects.filter(organization_id=organization_id).count(),
-        'shipments_in_transit': models.SupplierShipment.objects.filter(
-            organization_id=organization_id,
-            status='in_transit',
-        ).count(),
+        'rfqs': rfqs.count(),
+        'purchase_orders': purchase_orders.count(),
+        'shipments_in_transit': shipments.filter(status='in_transit').count(),
         'average_scorecard': scorecards.aggregate(avg=Avg('overall_score'))['avg'] or 0,
         'quality_events_by_status': list(
             quality_events.values('status').annotate(total=Count('id')).order_by('status')
         ),
         'private_records': (
-            accounts.filter(visibility='private').count()
-            + models.SupplierQuote.objects.filter(organization_id=organization_id, visibility='private').count()
+            accounts.filter(visibility__in=PRIVATE_VISIBILITIES).count()
+            + quotes.filter(visibility__in=PRIVATE_VISIBILITIES).count()
         ),
-        'shared_records': accounts.filter(visibility='shared').count(),
+        'shared_records': accounts.exclude(visibility__in=PRIVATE_VISIBILITIES).count(),
         'risk_distribution': list(accounts.values('risk_level').annotate(total=Count('id')).order_by('risk_level')),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def private_cockpit(request):
+    organization_id = _resolve_organization_id(request)
+    if not organization_id:
+        return Response({'organization_id': 'organization_id requerido'}, status=400)
+    context = resolve_medsupplier_context(request.user, organization_id)
+    if not context.can_access_supplier_cockpit:
+        return Response({'detail': 'Cockpit privado disponible solo para Supplier Admin/Finance/Sales.'}, status=403)
+
+    accounts = models.SupplierAccount.objects.filter(organization_id=organization_id)
+    quotes = models.SupplierQuote.objects.filter(organization_id=organization_id)
+    open_orders = models.SupplierPurchaseOrder.objects.filter(organization_id=organization_id).exclude(status__in=['closed', 'cancelled'])
+    today = timezone.now().date()
+    return Response({
+        'organization_id': organization_id,
+        'role': context.role,
+        'opportunities': {
+            'accounts': accounts.count(),
+            'rfqs': models.SupplierRFQ.objects.filter(organization_id=organization_id).count(),
+            'quotes_pending': quotes.filter(status__in=['draft', 'submitted']).count(),
+            'orders_open': open_orders.count(),
+        },
+        'finance': {
+            'quoted_total': quotes.aggregate(total=Count('id'))['total'] or 0,
+            'supplier_cost_total': str(sum((quote.supplier_cost for quote in quotes), Decimal('0'))),
+            'commission_total': str(sum((quote.commission for quote in quotes), Decimal('0'))),
+            'advance_total': str(sum((quote.advance for quote in quotes), Decimal('0'))),
+            'average_margin': str((quotes.aggregate(avg=Avg('margin'))['avg'] or Decimal('0')).quantize(Decimal('0.01'))),
+        },
+        'forecast': list(
+            quotes.exclude(status__in=['rejected', 'expired']).values(
+                'id', 'quote_number', 'account_id', 'status', 'total_amount',
+                'margin', 'forecast_probability', 'valid_until',
+            ).order_by('valid_until')[:20]
+        ),
+        'commercial_risk': list(
+            accounts.filter(risk_level__in=['high', 'critical']).values(
+                'id', 'name', 'account_code', 'risk_level', 'status', 'next_qbr_date',
+            )[:20]
+        ),
+        'aging': {
+            'expired_quotes': quotes.filter(valid_until__lt=today).exclude(status__in=['rejected', 'expired']).count(),
+            'orders_due': open_orders.filter(promised_ship_date__lt=today).count(),
+        },
+        'recent_accounts': list(accounts.order_by('-updated_at').values('id', 'name', 'account_code', 'updated_at')[:10]),
     })
 
 

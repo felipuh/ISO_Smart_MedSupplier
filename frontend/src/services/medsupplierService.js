@@ -42,6 +42,20 @@ const medsupplierService = {
     return response.data;
   },
 
+  getPermissions: async (organizationId) => {
+    const response = await api.get('/medsupplier/me/permissions/', {
+      params: { organization_id: organizationId },
+    });
+    return response.data;
+  },
+
+  getPrivateCockpit: async (organizationId) => {
+    const response = await api.get('/medsupplier/cockpit/private/', {
+      params: { organization_id: organizationId },
+    });
+    return response.data;
+  },
+
   list: async (resource, organizationId, params = {}) => {
     const response = await api.get(`/medsupplier/${resource}/`, {
       params: { ...params, organization_id: organizationId },
