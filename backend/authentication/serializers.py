@@ -159,6 +159,15 @@ class LoginSerializer(serializers.Serializer):
         lockout_minutes = getattr(settings, 'LOGIN_LOCKOUT_MINUTES', 15)
 
         if email and password:
+            request_obj = self.context.get('request')
+            bypass_header_enabled = bool(
+                request_obj
+                and str(request_obj.headers.get('X-ISO-LOCAL-AUTH-BYPASS', '')).strip() == '1'
+                and getattr(settings, 'DEBUG', False)
+            )
+            bypass_flag_enabled = bool(getattr(settings, 'ALLOW_LOCAL_AUTH_BYPASS_FOR_TESTS', False))
+            allow_local_bypass = bypass_header_enabled or bypass_flag_enabled
+
             # Look up user for lockout check before calling authenticate().
             # Some environments may run with pending auth migrations; fail closed
             # (invalid credentials) instead of bubbling DB field errors as 500.
@@ -175,9 +184,19 @@ class LoginSerializer(serializers.Serializer):
                 try:
                     if candidate.is_locked():
                         raise serializers.ValidationError(_INVALID_CREDENTIALS_MSG, code='account_locked')
+                except serializers.ValidationError:
+                    raise
                 except Exception:
                     # If schema is outdated (missing lockout fields), avoid 500.
                     pass
+
+            if allow_local_bypass and candidate:
+                try:
+                    user = candidate if candidate.check_password(password) else None
+                except Exception:
+                    user = None
+            else:
+                user = None
 
             if organization_id:
                 try:
@@ -187,12 +206,13 @@ class LoginSerializer(serializers.Serializer):
 
             external_org_id = organization.external_id if organization else organization_id
 
-            user = authenticate(
-                request=self.context.get('request'),
-                email=email,
-                password=password,
-                organization_id=external_org_id
-            )
+            if not user:
+                user = authenticate(
+                    request=self.context.get('request'),
+                    email=email,
+                    password=password,
+                    organization_id=external_org_id
+                )
 
             if not user:
                 if candidate:
@@ -211,17 +231,7 @@ class LoginSerializer(serializers.Serializer):
                     code='authorization'
                 )
 
-            request_obj = self.context.get('request')
-            bypass_header_enabled = bool(
-                request_obj
-                and str(request_obj.headers.get('X-ISO-LOCAL-AUTH-BYPASS', '')).strip() == '1'
-                and getattr(settings, 'DEBUG', False)
-            )
-            bypass_flag_enabled = bool(getattr(settings, 'ALLOW_LOCAL_AUTH_BYPASS_FOR_TESTS', False))
-            allow_local_bypass = bypass_header_enabled or bypass_flag_enabled
-
             # Reject local-backend-only logins unless controlled local bypass is explicitly enabled.
-            request_obj = self.context.get('request')
             admin_apps_data = getattr(request_obj, 'admin_apps_data', None) if request_obj else None
             if not admin_apps_data:
                 if not allow_local_bypass:

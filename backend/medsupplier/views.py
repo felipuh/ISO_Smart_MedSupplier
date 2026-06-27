@@ -1,9 +1,12 @@
+from decimal import Decimal
 from django.conf import settings
 from django.db.models import Avg, Count
+from django.forms.models import model_to_dict
+from django.utils.dateparse import parse_date
 from django.utils import timezone
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework import permissions, viewsets
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
 from authentication.models import UserProfile
@@ -11,6 +14,60 @@ from core.organization_scoping import OrganizationScopedViewSetMixin
 from integration.client import admin_apps_client
 
 from . import models, serializers
+
+
+PRIVATE_VISIBLE_ROLES = ['org_admin', 'iso_manager', 'user']
+
+
+def _request_ip_address(request):
+    forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
+
+
+def _safe_value(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, 'isoformat'):
+        return value.isoformat()
+    if hasattr(value, 'url'):
+        try:
+            return value.url
+        except ValueError:
+            return ''
+    return str(value)
+
+
+def _snapshot(instance):
+    values = model_to_dict(instance)
+    values['id'] = instance.pk
+    values['organization'] = getattr(instance, 'organization_id', None)
+    return {key: _safe_value(value) for key, value in values.items()}
+
+
+def _record_account(instance):
+    if isinstance(instance, models.SupplierAccount):
+        return instance
+    account = getattr(instance, 'account', None)
+    if account:
+        return account
+    document = getattr(instance, 'document', None)
+    if document:
+        return getattr(document, 'account', None)
+    return None
+
+
+def _record_label(instance):
+    for field in (
+        'account_code', 'full_name', 'title', 'requirement_id', 'document_number',
+        'rfq_number', 'quote_number', 'po_number', 'lot_number', 'shipment_number',
+        'inspection_number', 'event_number', 'capa_number',
+    ):
+        value = getattr(instance, field, None)
+        if value:
+            return value
+    return str(instance.pk)
 
 
 class MedSupplierCanEdit(permissions.BasePermission):
@@ -44,6 +101,28 @@ class MedSupplierCanEdit(permissions.BasePermission):
 class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, MedSupplierCanEdit]
 
+    def _user_role(self, organization_id):
+        role = getattr(self.request, 'user_role', None)
+        if role:
+            return role
+        profile = UserProfile.objects.filter(
+            user=self.request.user,
+            organization_id=organization_id,
+            is_active=True,
+        ).first()
+        return profile.role if profile else None
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        organization_id = self.get_organization_id()
+        role = self._user_role(organization_id)
+        if role in PRIVATE_VISIBLE_ROLES or self.request.user.is_superuser:
+            return queryset
+        model = getattr(queryset, 'model', None)
+        if model and any(field.name == 'visibility' for field in model._meta.fields):
+            return queryset.filter(visibility='shared')
+        return queryset
+
     def get_organization_id(self):
         organization_id = super().get_organization_id()
         if self.request.user.is_superuser:
@@ -58,15 +137,62 @@ class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelVie
 
     def perform_create(self, serializer):
         organization_id = self.get_organization_id()
-        serializer.save(
+        instance = serializer.save(
             organization_id=organization_id,
             created_by=self.request.user,
             updated_by=self.request.user,
         )
+        self._create_audit_event(instance, 'create', new_values=_snapshot(instance))
 
     def perform_update(self, serializer):
         self.get_organization_id()
-        serializer.save(updated_by=self.request.user)
+        old_values = _snapshot(serializer.instance)
+        instance = serializer.save(updated_by=self.request.user)
+        self._create_audit_event(instance, 'update', old_values=old_values, new_values=_snapshot(instance))
+
+    def perform_destroy(self, instance):
+        old_values = _snapshot(instance)
+        self._create_audit_event(instance, 'delete', old_values=old_values)
+        instance.delete()
+
+    def _create_audit_event(self, instance, action, old_values=None, new_values=None):
+        models.MedSupplierAuditEvent.objects.create(
+            organization_id=instance.organization_id,
+            account=_record_account(instance),
+            user=self.request.user if self.request.user.is_authenticated else None,
+            action=action,
+            record_type=instance._meta.model_name,
+            record_id=str(instance.pk),
+            description=f'{action} {_record_label(instance)}',
+            old_values=old_values or {},
+            new_values=new_values or {},
+            ip_address=_request_ip_address(self.request),
+            user_agent=self.request.META.get('HTTP_USER_AGENT', ''),
+        )
+
+    def _apply_business_update(self, instance, updates, description=None):
+        old_values = _snapshot(instance)
+        for field, value in updates.items():
+            setattr(instance, field, value)
+        if hasattr(instance, 'updated_by'):
+            instance.updated_by = self.request.user
+        instance.save()
+        self._create_audit_event(
+            instance,
+            'status_change',
+            old_values=old_values,
+            new_values=_snapshot(instance),
+        )
+        if description:
+            latest = models.MedSupplierAuditEvent.objects.filter(
+                organization=instance.organization,
+                record_type=instance._meta.model_name,
+                record_id=str(instance.pk),
+            ).first()
+            if latest:
+                latest.description = description
+                latest.save(update_fields=['description'])
+        return instance
 
 
 class ReadOnlyMedSupplierViewSet(OrganizationScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
@@ -84,6 +210,23 @@ class ReadOnlyMedSupplierViewSet(OrganizationScopedViewSetMixin, viewsets.ReadOn
             raise PermissionDenied('No tienes acceso a esta organización')
         return organization_id
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        organization_id = self.get_organization_id()
+        role = getattr(self.request, 'user_role', None)
+        if not role:
+            profile = UserProfile.objects.filter(
+                user=self.request.user,
+                organization_id=organization_id,
+                is_active=True,
+            ).first()
+            role = profile.role if profile else None
+        if role in PRIVATE_VISIBLE_ROLES or self.request.user.is_superuser:
+            return queryset
+        if queryset.model is models.MedSupplierAuditEvent:
+            return queryset.filter(account__visibility='shared')
+        return queryset
+
 
 class SupplierAccountViewSet(MedSupplierScopedViewSet):
     queryset = models.SupplierAccount.objects.all()
@@ -91,6 +234,57 @@ class SupplierAccountViewSet(MedSupplierScopedViewSet):
     filterset_fields = ['status', 'risk_level', 'visibility', 'regulated_industry']
     search_fields = ['name', 'legal_name', 'account_code', 'primary_contact_email']
     ordering_fields = ['name', 'created_at', 'updated_at', 'next_qbr_date']
+
+    @action(detail=True, methods=['post'], url_path='generate-qbr')
+    def generate_qbr(self, request, pk=None):
+        account = self.get_object()
+        today = timezone.now().date()
+        period_start = parse_date(request.data.get('period_start', '')) or today.replace(day=1)
+        period_end = parse_date(request.data.get('period_end', '')) or today
+        open_quality_events = models.SupplierQualityEvent.objects.filter(
+            organization=account.organization,
+            account=account,
+        ).exclude(status='closed').count()
+        risk_penalty = {
+            'low': Decimal('0'),
+            'medium': Decimal('5'),
+            'high': Decimal('10'),
+            'critical': Decimal('20'),
+        }.get(account.risk_level, Decimal('5'))
+        default_quality = max(Decimal('60'), Decimal('95') - risk_penalty - Decimal(open_quality_events * 3))
+        default_delivery = Decimal('90')
+        default_responsiveness = Decimal('92')
+        default_overall = (default_quality + default_delivery + default_responsiveness) / Decimal('3')
+        defaults = {
+            'organization': account.organization,
+            'quality_score': Decimal(str(request.data.get('quality_score', default_quality) or default_quality)),
+            'delivery_score': Decimal(str(request.data.get('delivery_score', default_delivery) or default_delivery)),
+            'responsiveness_score': Decimal(str(request.data.get('responsiveness_score', default_responsiveness) or default_responsiveness)),
+            'overall_score': Decimal(str(request.data.get('overall_score', default_overall.quantize(Decimal('0.01'))) or default_overall)),
+            'qbr_notes': request.data.get('qbr_notes', 'QBR generado desde Cliente 360.'),
+            'visibility': request.data.get('visibility', 'shared'),
+            'created_by': request.user,
+            'updated_by': request.user,
+        }
+        existing = models.SupplierScorecard.objects.filter(
+            account=account,
+            period_start=period_start,
+            period_end=period_end,
+        ).first()
+        old_values = _snapshot(existing) if existing else None
+        scorecard, created = models.SupplierScorecard.objects.update_or_create(
+            account=account,
+            period_start=period_start,
+            period_end=period_end,
+            defaults=defaults,
+        )
+        self._create_audit_event(
+            scorecard,
+            'create' if created else 'update',
+            old_values=old_values,
+            new_values=_snapshot(scorecard),
+        )
+        return Response(serializers.SupplierScorecardSerializer(scorecard).data)
 
 
 class SupplierContactViewSet(MedSupplierScopedViewSet):
@@ -127,6 +321,20 @@ class SupplierDocumentViewSet(MedSupplierScopedViewSet):
     filterset_fields = ['account', 'status', 'document_type', 'visibility']
     search_fields = ['document_number', 'title', 'owner']
 
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        document = self.get_object()
+        if document.status == 'obsolete':
+            raise ValidationError({'status': 'No se puede aprobar un documento obsoleto.'})
+        if document.status == 'effective':
+            raise ValidationError({'status': 'El documento ya esta vigente.'})
+        updates = {
+            'status': 'effective',
+            'effective_date': document.effective_date or timezone.now().date(),
+        }
+        document = self._apply_business_update(document, updates, f'approve document {_record_label(document)}')
+        return Response(self.get_serializer(document).data)
+
 
 class SupplierDocumentVersionViewSet(MedSupplierScopedViewSet):
     queryset = models.SupplierDocumentVersion.objects.select_related('document', 'document__account')
@@ -141,6 +349,14 @@ class SupplierRFQViewSet(MedSupplierScopedViewSet):
     filterset_fields = ['account', 'status', 'visibility']
     search_fields = ['rfq_number', 'title', 'notes']
 
+    @action(detail=True, methods=['post'], url_path='send')
+    def send(self, request, pk=None):
+        rfq = self.get_object()
+        if rfq.status in ['sent', 'quoted', 'closed', 'cancelled']:
+            raise ValidationError({'status': 'La RFQ no se puede enviar desde su estado actual.'})
+        rfq = self._apply_business_update(rfq, {'status': 'sent'}, f'send RFQ {_record_label(rfq)}')
+        return Response(self.get_serializer(rfq).data)
+
 
 class SupplierQuoteViewSet(MedSupplierScopedViewSet):
     queryset = models.SupplierQuote.objects.select_related('account', 'rfq')
@@ -148,12 +364,42 @@ class SupplierQuoteViewSet(MedSupplierScopedViewSet):
     filterset_fields = ['account', 'rfq', 'status', 'visibility']
     search_fields = ['quote_number', 'private_margin_notes']
 
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        quote = self.get_object()
+        if quote.status in ['approved', 'rejected', 'expired']:
+            raise ValidationError({'status': 'La cotizacion no se puede aprobar desde su estado actual.'})
+        if quote.valid_until and quote.valid_until < timezone.now().date():
+            raise ValidationError({'valid_until': 'No se puede aprobar una cotizacion expirada.'})
+        quote = self._apply_business_update(quote, {'status': 'approved'}, f'approve quote {_record_label(quote)}')
+        return Response(self.get_serializer(quote).data)
+
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        quote = self.get_object()
+        if quote.status in ['approved', 'rejected', 'expired']:
+            raise ValidationError({'status': 'La cotizacion no se puede rechazar desde su estado actual.'})
+        quote = self._apply_business_update(quote, {'status': 'rejected'}, f'reject quote {_record_label(quote)}')
+        return Response(self.get_serializer(quote).data)
+
 
 class SupplierPurchaseOrderViewSet(MedSupplierScopedViewSet):
     queryset = models.SupplierPurchaseOrder.objects.select_related('account', 'quote')
     serializer_class = serializers.SupplierPurchaseOrderSerializer
     filterset_fields = ['account', 'quote', 'status', 'visibility']
     search_fields = ['po_number']
+
+    @action(detail=True, methods=['post'], url_path='close')
+    def close(self, request, pk=None):
+        purchase_order = self.get_object()
+        if purchase_order.status in ['closed', 'cancelled']:
+            raise ValidationError({'status': 'La orden no se puede cerrar desde su estado actual.'})
+        purchase_order = self._apply_business_update(
+            purchase_order,
+            {'status': 'closed'},
+            f'close PO {_record_label(purchase_order)}',
+        )
+        return Response(self.get_serializer(purchase_order).data)
 
 
 class SupplierLotViewSet(MedSupplierScopedViewSet):
@@ -183,12 +429,36 @@ class SupplierQualityEventViewSet(MedSupplierScopedViewSet):
     filterset_fields = ['account', 'inspection', 'event_type', 'severity', 'status', 'visibility']
     search_fields = ['event_number', 'title', 'description', 'owner']
 
+    @action(detail=True, methods=['post'], url_path='close')
+    def close(self, request, pk=None):
+        quality_event = self.get_object()
+        if quality_event.status == 'closed':
+            raise ValidationError({'status': 'El evento de calidad ya esta cerrado.'})
+        if quality_event.capas.exclude(status__in=['closed', 'cancelled']).exists():
+            raise ValidationError({'capas': 'No se puede cerrar el evento mientras tenga CAPA abierta.'})
+        quality_event = self._apply_business_update(
+            quality_event,
+            {'status': 'closed'},
+            f'close quality event {_record_label(quality_event)}',
+        )
+        return Response(self.get_serializer(quality_event).data)
+
 
 class SupplierCAPAViewSet(MedSupplierScopedViewSet):
     queryset = models.SupplierCAPA.objects.select_related('account', 'quality_event')
     serializer_class = serializers.SupplierCAPASerializer
     filterset_fields = ['account', 'quality_event', 'status', 'visibility']
     search_fields = ['capa_number', 'root_cause', 'corrective_action', 'preventive_action', 'owner']
+
+    @action(detail=True, methods=['post'], url_path='close')
+    def close(self, request, pk=None):
+        capa = self.get_object()
+        if capa.status in ['closed', 'cancelled']:
+            raise ValidationError({'status': 'La CAPA no se puede cerrar desde su estado actual.'})
+        if not (capa.effectiveness_result or '').strip():
+            raise ValidationError({'effectiveness_result': 'Se requiere resultado de efectividad para cerrar la CAPA.'})
+        capa = self._apply_business_update(capa, {'status': 'closed'}, f'close CAPA {_record_label(capa)}')
+        return Response(self.get_serializer(capa).data)
 
 
 class SupplierScorecardViewSet(MedSupplierScopedViewSet):

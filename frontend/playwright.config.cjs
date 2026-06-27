@@ -24,6 +24,11 @@ module.exports = defineConfig({
     command: 'npm run dev -- --host 127.0.0.1 --port 3001 --strictPort',
     url: baseURL,
     reuseExistingServer: true,
+    env: {
+      ...process.env,
+      VITE_LOCAL_AUTH_BYPASS: process.env.VITE_LOCAL_AUTH_BYPASS || '1',
+      VITE_API_PROXY_TARGET: process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:8002',
+    },
     timeout: 120000,
   },
 });

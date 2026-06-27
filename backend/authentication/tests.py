@@ -1,9 +1,12 @@
 from django.contrib.auth import get_user_model
 from django.core import mail
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from datetime import timedelta
+from io import StringIO
 from rest_framework.test import APIClient
 
 from authentication.models import PasswordResetToken, UserProfile
@@ -202,6 +205,52 @@ class LoginLockoutTests(TestCase):
             format='json',
         )
         self.assertEqual(response.status_code, 200)
+
+
+class LocalDevPasswordCommandTests(TestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.user = user_model.objects.create_user(
+            email='local-dev@isosmart.local',
+            password='OriginalPass@123',
+            first_name='Local',
+            last_name='Dev',
+        )
+        self.user.set_unusable_password()
+        self.user.failed_login_attempts = 4
+        self.user.account_locked_until = timezone.now() + timedelta(minutes=10)
+        self.user.save(
+            update_fields=['password', 'failed_login_attempts', 'account_locked_until']
+        )
+
+    @override_settings(DEBUG=False, ALLOW_LOCAL_AUTH_BYPASS_FOR_TESTS=True, IS_PRODUCTION=True)
+    def test_command_requires_explicit_local_confirmation_for_production_like_settings(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                'set_local_dev_password',
+                email=self.user.email,
+                password='LocalPass@123',
+            )
+
+    @override_settings(DEBUG=False, ALLOW_LOCAL_AUTH_BYPASS_FOR_TESTS=True, IS_PRODUCTION=True)
+    def test_command_sets_local_password_and_clears_lockout_when_confirmed(self):
+        out = StringIO()
+
+        call_command(
+            'set_local_dev_password',
+            email=self.user.email,
+            password='LocalPass@123',
+            confirm_local=True,
+            stdout=out,
+        )
+
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.has_usable_password())
+        self.assertTrue(self.user.check_password('LocalPass@123'))
+        self.assertEqual(self.user.failed_login_attempts, 0)
+        self.assertIsNone(self.user.account_locked_until)
+        self.assertFalse(self.user.must_change_password)
+        self.assertIn('AdminApps password was not changed', out.getvalue())
 
 
 @override_settings(PASSWORD_HISTORY_COUNT=5)

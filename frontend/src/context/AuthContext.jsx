@@ -40,6 +40,7 @@ const clearOnboardingSessionFlags = () => {
 };
 
 const AuthContext = createContext(null);
+const localAuthBypassEnabled = import.meta.env.VITE_LOCAL_AUTH_BYPASS === '1';
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -128,7 +129,9 @@ export const AuthProvider = ({ children }) => {
         payload.organization_id = organizationId;
       }
 
-      const response = await api.post('/auth/login/', payload);
+      const response = await api.post('/auth/login/', payload, {
+        headers: localAuthBypassEnabled ? { 'X-ISO-LOCAL-AUTH-BYPASS': '1' } : undefined,
+      });
       const { access, refresh, user: userData, profile: profileData, organizations: orgs } = response.data;
 
       // Guardar tokens

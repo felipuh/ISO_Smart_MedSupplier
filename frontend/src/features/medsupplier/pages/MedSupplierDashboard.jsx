@@ -30,7 +30,7 @@ const StatTile = ({ icon: Icon, label, value, tone = 'blue' }) => {
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-center gap-3">
         <span className={`flex h-10 w-10 items-center justify-center rounded-lg ${tones[tone]}`}>
-          <Icon className="h-5 w-5" />
+          {React.createElement(Icon, { className: 'h-5 w-5' })}
         </span>
         <div>
           <p className="text-sm text-slate-500 dark:text-slate-400">{label}</p>
