@@ -112,6 +112,7 @@ ADMIN_APPS_INTEGRATION = {
     'CACHE_TTL': int(os.getenv('ADMIN_APPS_CACHE_TTL', '300')),
     'SYNC_USERS': _env_bool('ADMIN_APPS_SYNC_USERS', default=True),
     'REQUIRE_IDENTITY_SOURCE': _env_bool('ADMIN_APPS_REQUIRE_IDENTITY_SOURCE', default=True),
+    'ALLOW_LOCAL_FALLBACK': _env_bool('ADMIN_APPS_ALLOW_LOCAL_FALLBACK', default=False),
 }
 
 # Commercial packaging for MedSupplier. Even when sold as a separate product,
@@ -174,6 +175,7 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'backend.middleware.RequestIDMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'backend.middleware.ProductionSecurityHeadersMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'backend.middleware.CsrfExemptAPIMiddleware',
@@ -308,12 +310,17 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 SECURE_CROSS_ORIGIN_OPENER_POLICY = 'same-origin'
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_SSL_REDIRECT = _env_bool('SECURE_SSL_REDIRECT', default=IS_PRODUCTION)
+SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '31536000' if IS_PRODUCTION else '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', default=IS_PRODUCTION)
+SECURE_HSTS_PRELOAD = _env_bool('SECURE_HSTS_PRELOAD', default=False)
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SAMESITE = 'Lax'
-SESSION_COOKIE_SECURE = _env_bool('SESSION_COOKIE_SECURE', default=not DEBUG)
-CSRF_COOKIE_SECURE = _env_bool('CSRF_COOKIE_SECURE', default=not DEBUG)
+SESSION_COOKIE_SECURE = True if IS_PRODUCTION else _env_bool('SESSION_COOKIE_SECURE', default=not DEBUG)
+CSRF_COOKIE_SECURE = True if IS_PRODUCTION else _env_bool('CSRF_COOKIE_SECURE', default=not DEBUG)
 
 # Configuración de Celery
 CELERY_BROKER_URL = 'redis://localhost:6379/1'

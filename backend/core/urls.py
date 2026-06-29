@@ -20,6 +20,7 @@ urlpatterns = [
     path('risks/stats/', views.risk_stats, name='risk-stats'),
     path('context/latest/', views.context_analysis_latest, name='context-latest'),
     path('health/', views.health_check, name='health-check'),
+    path('ready/', views.readiness_check, name='readiness-check'),
     path('export/', views.export_data, name='export-data'),
     path('feature-flags/', views.feature_flags_view, name='feature-flags'),
     path('', include(router.urls)),

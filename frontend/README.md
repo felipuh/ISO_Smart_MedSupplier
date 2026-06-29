@@ -1,45 +1,40 @@
-# React + Vite
+# ISO Smart MedSupplier Frontend
 
-## Linea Base UI/UX + Prompt
+Frontend React/Vite propio de MedSupplier.
 
-Estandar operativo para evolucion frontend (compatibilidad, i18n, accesibilidad, IA UX y checklist de PR):
-
-- [../docs/internal/FRONTEND_LINEA_BASE_Y_PROMPT.md](../docs/internal/FRONTEND_LINEA_BASE_Y_PROMPT.md)
-- [../docs/internal/SMART3AI_FRONTEND_BASELINE_UNIFICADA.md](../docs/internal/SMART3AI_FRONTEND_BASELINE_UNIFICADA.md)
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
-
-## E2E I18N Smoke
-
-Runtime multilingual smoke test for login, dashboard, and onboarding:
+## Entorno local reproducible
 
 ```bash
-npm run test:i18n:smoke
+cd /home/felipe/proyectos/ISO_Smart_MedSupplier/frontend
+npm ci
 ```
 
-Expected environment:
-
-- Frontend reachable at `BASE_URL` (default `http://127.0.0.1:3001`)
-- Backend auth endpoints available through `/api` proxy
-- Credentials via env vars (defaults):
-	- `TEST_EMAIL=admin@isosmart.local`
-	- `TEST_PASSWORD=Admin@123456`
-
-Install Playwright browser if needed:
+Para desarrollo local:
 
 ```bash
-npm run test:e2e:install
+npm run dev -- --host 127.0.0.1 --port 3001
 ```
+
+## Contrato de validacion
+
+```bash
+cd /home/felipe/proyectos/ISO_Smart_MedSupplier/frontend
+npm run lint
+npm run build
+npm run test:e2e:medsupplier
+```
+
+El E2E de MedSupplier levanta el backend desde `../backend` usando `../backend/.venv312/bin/python` por defecto. No debe apuntar al venv de ISO Smart.
+
+## Configuracion runtime
+
+Variables utiles:
+
+```bash
+BASE_URL=http://127.0.0.1:3001
+VITE_API_PROXY_TARGET=http://127.0.0.1:18002
+VITE_LOCAL_AUTH_BYPASS=1
+PYTHON_BIN=/home/felipe/proyectos/ISO_Smart_MedSupplier/backend/.venv312/bin/python
+```
+
+`PYTHON_BIN` es opcional; si se define, debe apuntar a un interprete del backend de MedSupplier.

@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import viewsets, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.conf import settings as django_settings
 from django.http import FileResponse, Http404
 from django.http import HttpResponse
@@ -273,6 +273,7 @@ def context_analysis_latest(request):
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def health_check(request):
     """Health check endpoint"""
     try:
@@ -291,6 +292,28 @@ def health_check(request):
             'status': 'unhealthy',
             'error': 'database_unavailable'
         }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def readiness_check(request):
+    """Readiness probe for production-like orchestration."""
+    checks = {}
+    response_status = status.HTTP_200_OK
+
+    try:
+        check_database_connection()
+        checks['database'] = 'ready'
+    except HealthCheckError:
+        checks['database'] = 'unready'
+        response_status = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    return Response({
+        'status': 'ready' if response_status == status.HTTP_200_OK else 'unready',
+        'service': 'isosmart-medsupplier-backend',
+        'checks': checks,
+        'timestamp': datetime.now().isoformat(),
+    }, status=response_status)
 
 
 class DocumentViewSet(OrganizationScopedViewSetMixin, viewsets.ModelViewSet):

@@ -5,6 +5,7 @@ from django.conf import settings
 from django.db.models import Avg, Count
 from django.forms.models import model_to_dict
 from django.http import HttpResponse
+from django.utils.html import escape
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -367,6 +368,41 @@ class SupplierDocumentViewSet(MedSupplierScopedViewSet):
             reason=reason,
             signature_meaning='approval',
         )
+        version, _ = models.SupplierDocumentVersion.objects.get_or_create(
+            organization=document.organization,
+            document=document,
+            revision=document.current_revision,
+            defaults={
+                'change_reason': reason,
+                'visibility': document.visibility,
+                'created_by': request.user,
+                'updated_by': request.user,
+            },
+        )
+        version.approved_by = request.user.get_full_name() or request.user.email
+        version.approved_at = timezone.now()
+        version.updated_by = request.user
+        if not version.change_reason:
+            version.change_reason = reason
+        version.save(update_fields=['approved_by', 'approved_at', 'updated_by', 'updated_at', 'change_reason'])
+        return Response(self.get_serializer(document).data)
+
+    @action(detail=True, methods=['post'], url_path='obsolete')
+    def obsolete(self, request, pk=None):
+        reason = self._require_reason()
+        document = self.get_object()
+        if document.status == 'obsolete':
+            raise ValidationError({'status': 'El documento ya esta obsoleto.'})
+        document = self._apply_business_update(
+            document,
+            {
+                'status': 'obsolete',
+                'obsolete_date': timezone.now().date(),
+            },
+            f'obsolete document {_record_label(document)}',
+            reason=reason,
+            signature_meaning='status_change',
+        )
         return Response(self.get_serializer(document).data)
 
 
@@ -432,6 +468,89 @@ class SupplierQuoteViewSet(MedSupplierScopedViewSet):
         )
         return Response(self.get_serializer(quote).data)
 
+    @action(detail=True, methods=['post'], url_path='revise')
+    def revise(self, request, pk=None):
+        reason = self._require_reason()
+        quote = self.get_object()
+        context = self.get_medsupplier_context()
+        assert_can_mutate(context)
+        assert_object_allowed(quote, context)
+
+        base_revision = int((quote.metadata or {}).get('revision', 1))
+        revision = base_revision + 1
+        quote_number = f'{quote.quote_number}-R{revision}'
+        while models.SupplierQuote.objects.filter(
+            organization=quote.organization,
+            quote_number=quote_number,
+        ).exists():
+            revision += 1
+            quote_number = f'{quote.quote_number}-R{revision}'
+
+        new_quote = models.SupplierQuote.objects.create(
+            organization=quote.organization,
+            account=quote.account,
+            rfq=quote.rfq,
+            quote_number=quote_number,
+            status='draft',
+            currency=quote.currency,
+            total_amount=quote.total_amount,
+            valid_until=parse_date(request.data.get('valid_until', '')) or quote.valid_until,
+            private_margin_notes=quote.private_margin_notes,
+            supplier_cost=quote.supplier_cost,
+            margin=quote.margin,
+            commission=quote.commission,
+            advance=quote.advance,
+            internal_notes=quote.internal_notes,
+            forecast_probability=quote.forecast_probability,
+            visibility=quote.visibility,
+            metadata={
+                **(quote.metadata or {}),
+                'revision': revision,
+                'previous_quote_id': quote.id,
+                'revision_reason': reason,
+            },
+            created_by=request.user,
+            updated_by=request.user,
+        )
+        for line in quote.lines.all().order_by('line_number'):
+            models.SupplierQuoteLine.objects.create(
+                organization=line.organization,
+                quote=new_quote,
+                rfq=line.rfq,
+                account=line.account,
+                line_number=line.line_number,
+                product_code=line.product_code,
+                description=line.description,
+                technical_description=line.technical_description,
+                quantity=line.quantity,
+                uom=line.uom,
+                moq=line.moq,
+                lead_time_days=line.lead_time_days,
+                tooling=line.tooling,
+                incoterm=line.incoterm,
+                unit_price=line.unit_price,
+                supplier_cost=line.supplier_cost,
+                margin=line.margin,
+                currency=line.currency,
+                valid_until=line.valid_until,
+                taxes_and_charges=line.taxes_and_charges,
+                customer_notes=line.customer_notes,
+                internal_notes=line.internal_notes,
+                visibility=line.visibility,
+                metadata=line.metadata,
+                created_by=request.user,
+                updated_by=request.user,
+            )
+        self._create_audit_event(
+            quote,
+            'status_change',
+            old_values=_snapshot(quote),
+            new_values={'revised_quote_id': new_quote.id, 'revision': revision},
+            reason=reason,
+        )
+        self._create_esignature(quote, 'status_change', reason)
+        return Response(self.get_serializer(new_quote).data, status=201)
+
 
 class SupplierQuoteLineViewSet(MedSupplierScopedViewSet):
     queryset = models.SupplierQuoteLine.objects.select_related('account', 'quote', 'rfq')
@@ -460,6 +579,39 @@ class SupplierPurchaseOrderViewSet(MedSupplierScopedViewSet):
             signature_meaning='closure',
         )
         return Response(self.get_serializer(purchase_order).data)
+
+    @action(detail=True, methods=['get'], url_path='traceability')
+    def traceability(self, request, pk=None):
+        purchase_order = self.get_object()
+        shipments = purchase_order.shipments.all().order_by('shipment_number')
+        lots = purchase_order.lots.all().order_by('lot_number')
+        inspections = models.SupplierInspection.objects.filter(
+            organization=purchase_order.organization,
+            shipment__in=shipments,
+        ).order_by('inspection_number')
+        return Response({
+            'purchase_order': self.get_serializer(purchase_order).data,
+            'lines': serializers.SupplierOrderLineSerializer(
+                purchase_order.lines.all().order_by('line_number'),
+                many=True,
+                context=self.get_serializer_context(),
+            ).data,
+            'lots': serializers.SupplierLotSerializer(
+                lots,
+                many=True,
+                context=self.get_serializer_context(),
+            ).data,
+            'shipments': serializers.SupplierShipmentSerializer(
+                shipments,
+                many=True,
+                context=self.get_serializer_context(),
+            ).data,
+            'inspections': serializers.SupplierInspectionSerializer(
+                inspections,
+                many=True,
+                context=self.get_serializer_context(),
+            ).data,
+        })
 
 
 class SupplierOrderLineViewSet(MedSupplierScopedViewSet):
@@ -553,6 +705,41 @@ class SupplierCAPAViewSet(MedSupplierScopedViewSet):
         )
         return Response(self.get_serializer(capa).data)
 
+    @action(detail=True, methods=['post'], url_path='add-action')
+    def add_action(self, request, pk=None):
+        capa = self.get_object()
+        context = self.get_medsupplier_context()
+        assert_can_mutate(context)
+        assert_object_allowed(capa, context)
+        action_text = (request.data.get('action') or '').strip()
+        if not action_text:
+            raise ValidationError({'action': 'La acción CAPA es obligatoria.'})
+        owner = (request.data.get('owner') or '').strip()
+        due_date = request.data.get('due_date') or ''
+        old_values = _snapshot(capa)
+        actions = list((capa.metadata or {}).get('actions', []))
+        entry = {
+            'sequence': len(actions) + 1,
+            'action': action_text,
+            'owner': owner,
+            'due_date': due_date,
+            'status': request.data.get('status') or 'open',
+            'created_at': timezone.now().isoformat(),
+            'created_by': request.user.email,
+        }
+        actions.append(entry)
+        capa.metadata = {**(capa.metadata or {}), 'actions': actions}
+        capa.updated_by = request.user
+        capa.save(update_fields=['metadata', 'updated_by', 'updated_at'])
+        self._create_audit_event(
+            capa,
+            'update',
+            old_values=old_values,
+            new_values=_snapshot(capa),
+            reason=request.data.get('reason', ''),
+        )
+        return Response({'actions': actions, 'capa': self.get_serializer(capa).data}, status=201)
+
 
 class SupplierFMEAViewSet(MedSupplierScopedViewSet):
     queryset = models.SupplierFMEA.objects.select_related('account')
@@ -582,7 +769,11 @@ class MedSupplierAuditEventViewSet(ReadOnlyMedSupplierViewSet):
 
     @action(detail=False, methods=['get'], url_path='export')
     def export(self, request):
-        export_format = request.query_params.get('format', 'json').lower()
+        export_format = (
+            request.query_params.get('file_format')
+            or request.query_params.get('format')
+            or 'json'
+        ).lower()
         queryset = self.filter_queryset(self.get_queryset())
         serializer = self.get_serializer(queryset[:1000], many=True)
         if export_format == 'csv':
@@ -654,7 +845,55 @@ class EvidencePackageViewSet(MedSupplierScopedViewSet):
             raise ValidationError({'entries': 'No se puede exportar un evidence package vacío.'})
         data = self.get_serializer(package).data
         self._create_audit_event(package, 'export', new_values={'package': data}, reason='Evidence package export')
+        export_format = (
+            request.query_params.get('file_format')
+            or request.query_params.get('format')
+            or 'json'
+        ).lower()
+        if export_format == 'html':
+            rows = ''.join(
+                '<tr>'
+                f'<td>{escape(entry["object_type"])}</td>'
+                f'<td>{escape(entry["object_id"])}</td>'
+                f'<td>{escape(entry.get("label") or "")}</td>'
+                '</tr>'
+                for entry in data['entries']
+            )
+            html = (
+                '<!doctype html><html><head><meta charset="utf-8">'
+                f'<title>{escape(package.package_number)} Evidence Package</title>'
+                '</head><body>'
+                f'<h1>{escape(package.title)}</h1>'
+                f'<p>Package: {escape(package.package_number)} | Version: {escape(package.version)} | '
+                f'Status: {escape(package.status)} | Checksum: {escape(package.checksum or "")}</p>'
+                '<table><thead><tr><th>Object type</th><th>Object ID</th><th>Label</th></tr></thead>'
+                f'<tbody>{rows}</tbody></table>'
+                '</body></html>'
+            )
+            response = HttpResponse(html, content_type='text/html')
+            response['Content-Disposition'] = f'attachment; filename="{package.package_number}.html"'
+            return response
         return Response(data)
+
+    @action(detail=True, methods=['get'], url_path='index')
+    def index(self, request, pk=None):
+        package = self.get_object()
+        entries = package.entries.all().order_by('object_type', 'object_id')
+        grouped = {}
+        for entry in entries:
+            grouped.setdefault(entry.object_type, []).append({
+                'object_id': entry.object_id,
+                'label': entry.label,
+                'metadata': entry.metadata,
+                'added_at': entry.added_at,
+            })
+        return Response({
+            'package_number': package.package_number,
+            'status': package.status,
+            'checksum': package.checksum,
+            'entry_count': entries.count(),
+            'objects': grouped,
+        })
 
 
 class EvidencePackageEntryViewSet(viewsets.ModelViewSet):
@@ -807,11 +1046,21 @@ def private_cockpit(request):
             'advance_total': str(sum((quote.advance for quote in quotes), Decimal('0'))),
             'average_margin': str((quotes.aggregate(avg=Avg('margin'))['avg'] or Decimal('0')).quantize(Decimal('0.01'))),
         },
+        'billing': {
+            'open_order_count': open_orders.count(),
+            'open_order_value': str(sum((order.total_amount for order in open_orders), Decimal('0'))),
+            'approved_quote_value': str(sum((quote.total_amount for quote in quotes.filter(status='approved')), Decimal('0'))),
+        },
         'forecast': list(
             quotes.exclude(status__in=['rejected', 'expired']).values(
                 'id', 'quote_number', 'account_id', 'status', 'total_amount',
                 'margin', 'forecast_probability', 'valid_until',
             ).order_by('valid_until')[:20]
+        ),
+        'internal_notes': list(
+            quotes.exclude(internal_notes='').values(
+                'id', 'quote_number', 'account_id', 'internal_notes', 'private_margin_notes',
+            ).order_by('-updated_at')[:20]
         ),
         'commercial_risk': list(
             accounts.filter(risk_level__in=['high', 'critical']).values(
@@ -840,11 +1089,10 @@ def integration_status(request):
     adminapps_org_id = organization.external_id if organization and organization.external_id else organization_id
 
     health = admin_apps_client.health_check()
-    modules_result = admin_apps_client.get_organization_modules(adminapps_org_id, use_cache=False)
-    modules = modules_result.get('modules') or []
-    medsupplier_module = next(
-        (module for module in modules if module.get('code') == 'MEDSUPPLIER'),
-        None,
+    product_access = admin_apps_client.validate_product_access(
+        adminapps_org_id,
+        'MEDSUPPLIER',
+        use_cache=False,
     )
 
     return Response({
@@ -857,7 +1105,7 @@ def integration_status(request):
             'users': True,
             'roles': True,
             'entitlements': True,
-            'module_access': True,
+            'product_access': True,
             'required_for_identity': settings.ADMIN_APPS_INTEGRATION.get('REQUIRE_IDENTITY_SOURCE', True),
         },
         'organization': {
@@ -869,11 +1117,13 @@ def integration_status(request):
         'adminapps': {
             'available': 'error' not in health,
             'health': health,
-            'modules_source': modules_result.get('source', 'adminapps'),
+            'product_access_source': product_access.get('source', 'adminapps'),
+            'fallback': bool(product_access.get('fallback')),
         },
         'entitlement': {
-            'enabled': bool(medsupplier_module and medsupplier_module.get('enabled', True)),
-            'module': medsupplier_module,
+            'enabled': bool(product_access.get('allowed')),
+            'reason': product_access.get('reason'),
+            'product': product_access.get('product'),
         },
         'iso_smart_integration': {
             'optional_commercial_bundle': True,

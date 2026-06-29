@@ -59,7 +59,7 @@ class BaseMedSupplierSerializer(OrganizationRelationValidator, serializers.Model
             for field_name in PRIVATE_COMMERCIAL_FIELDS:
                 fields.pop(field_name, None)
         elif medsupplier_context and not medsupplier_context.can_view_private_financials:
-            for field_name in {'supplier_cost', 'margin', 'commission', 'advance'}:
+            for field_name in PRIVATE_COMMERCIAL_FIELDS:
                 fields.pop(field_name, None)
         return fields
 

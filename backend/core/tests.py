@@ -30,6 +30,36 @@ from planning.models import RiskOpportunity
 from backend.tasks import evaluate_operational_notifications_task
 
 
+class ProductionLikeProbeTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_root_health_and_readiness_are_public(self):
+        health_response = self.client.get('/health')
+        ready_response = self.client.get('/ready')
+
+        self.assertEqual(health_response.status_code, 200)
+        self.assertEqual(ready_response.status_code, 200)
+        self.assertEqual(health_response.data['status'], 'healthy')
+        self.assertEqual(ready_response.data['status'], 'ready')
+
+    def test_api_health_and_readiness_are_public(self):
+        health_response = self.client.get('/api/health/')
+        ready_response = self.client.get('/api/ready/')
+
+        self.assertEqual(health_response.status_code, 200)
+        self.assertEqual(ready_response.status_code, 200)
+
+    def test_security_policy_headers_are_present(self):
+        response = self.client.get('/health')
+
+        self.assertEqual(response['X-Frame-Options'], 'DENY')
+        self.assertEqual(response['X-Content-Type-Options'], 'nosniff')
+        self.assertEqual(response['Referrer-Policy'], 'strict-origin-when-cross-origin')
+        self.assertEqual(response['Content-Security-Policy'], "frame-ancestors 'none'")
+        self.assertIn('camera=()', response['Permissions-Policy'])
+
+
 class LegacyScopedEndpointsTests(TestCase):
     def setUp(self):
         self.client = APIClient()

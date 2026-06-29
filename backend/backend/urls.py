@@ -11,6 +11,7 @@ from django.conf.urls.static import static
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health', views.health_check, name='health'),
+    path('ready', views.readiness_check, name='ready'),
     
     # Explicit routes for stats and latest endpoints (before includes to take priority)
     path('api/maps/stats/', spm_views.ProcessMapViewSet.as_view({'get': 'stats'}), name='maps-stats'),

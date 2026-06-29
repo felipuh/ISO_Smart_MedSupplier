@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
-const PYTHON_BIN = process.env.PYTHON_BIN || '/home/felipe/proyectos/isosmart/backend/.venv312/bin/python';
+const PYTHON_BIN = process.env.PYTHON_BIN || '/home/felipe/proyectos/ISO_Smart_MedSupplier/backend/.venv312/bin/python';
 const REPO_ROOT = path.resolve(process.cwd(), '..');
 const DEMO_EMAIL = 'medsupplier.e2e@smart3ai.local';
 const DEMO_PASSWORD = 'MedSupplierDemo@123';

@@ -53,5 +53,5 @@ La información comercial privada debe permanecer marcada como `private` y no ex
 
 ```bash
 cd /home/felipe/proyectos/ISO_Smart_MedSupplier/backend
-DJANGO_SETTINGS_MODULE=backend.settings_test /home/felipe/proyectos/isosmart/backend/.venv312/bin/python manage.py test medsupplier
+DJANGO_SETTINGS_MODULE=backend.settings_test ./.venv312/bin/python manage.py test medsupplier
 ```

@@ -1,12 +1,4 @@
-"""
-Cliente de Integración con Admin Apps para ISO Smart
-Permite a ISO Smart comunicarse con Admin Apps para:
-- Validar usuarios
-- Obtener organizaciones
-- Verificar módulos activos
-
-Fallback: Si Admin Apps no está disponible, usa datos de BD local (Organization model)
-"""
+"""AdminApps integration client for identity, organizations and product access."""
 import requests
 from django.conf import settings
 from django.core.cache import cache
@@ -41,6 +33,10 @@ class AdminAppsClient:
         self.api_key = config.get('API_KEY', '')
         self.timeout = config.get('TIMEOUT', 10)
         self.cache_ttl = config.get('CACHE_TTL', 300)
+
+    def _local_fallback_allowed(self):
+        config = getattr(settings, 'ADMIN_APPS_INTEGRATION', {})
+        return bool(config.get('ALLOW_LOCAL_FALLBACK', False)) and not getattr(settings, 'IS_PRODUCTION', False)
     
     def _get_headers(self):
         """Headers para las peticiones"""
@@ -317,12 +313,25 @@ class AdminAppsClient:
                     'name': 'Process Mapper',
                     'enabled': ai_spm_enabled,
                 },
-                {
+            ]
+
+            if self._local_fallback_allowed():
+                try:
+                    from medsupplier.models import MedSupplierUserScope
+                    medsupplier_enabled = MedSupplierUserScope.objects.filter(
+                        organization=org,
+                        is_active=True,
+                    ).exists()
+                except Exception:
+                    logger.exception("Error evaluando fallback local MedSupplier para org %s", org_id)
+                    medsupplier_enabled = False
+
+                modules.append({
                     'code': 'MEDSUPPLIER',
                     'name': 'ISO Smart MedSupplier',
-                    'enabled': True,
-                },
-            ]
+                    'enabled': medsupplier_enabled,
+                    'source': 'local_database_explicit_fallback',
+                })
             
             return {
                 'organization_id': org_id,
@@ -336,6 +345,107 @@ class AdminAppsClient:
         except Exception as e:
             logger.exception(f"Error al obtener módulos locales para org {org_id}: {e}")
             return {'error': str(e), 'code': 'local_error'}
+
+    def validate_product_access(self, org_id, product_code, use_cache=True):
+        """Validate product-neutral access against AdminApps; fail closed by default."""
+        normalized_code = str(product_code or '').strip().upper()
+        adminapps_org_id = self._resolve_adminapps_org_id(org_id)
+        cache_key = (
+            f'adminapps:organization:{adminapps_org_id}:product:{normalized_code}:validate'
+            if use_cache else None
+        )
+        result = self._make_request(
+            'GET',
+            f'/organizations/{adminapps_org_id}/products/{normalized_code}/validate/',
+            use_cache=use_cache,
+            cache_key=cache_key,
+        )
+
+        if result.get('allowed') is True:
+            result.setdefault('source', 'adminapps')
+            return result
+
+        # Business denials from AdminApps must not be bypassed.
+        if result.get('allowed') is False:
+            result.setdefault('source', 'adminapps')
+            return result
+
+        # Transport/service errors can use explicit local fallback in test/demo only.
+        if 'error' in result and self._local_fallback_allowed():
+            logger.warning(
+                "AdminApps product validation failed for org=%s product=%s; using explicit local fallback: %s",
+                org_id,
+                normalized_code,
+                result.get('code') or result.get('error'),
+            )
+            return self._validate_product_access_local(org_id, normalized_code, result)
+
+        return {
+            'allowed': False,
+            'organization_id': str(org_id),
+            'product_code': normalized_code,
+            'reason': result.get('reason') or result.get('code') or 'adminapps_unavailable',
+            'source': 'fail_closed',
+            'adminapps_error': result,
+        }
+
+    def _validate_product_access_local(self, org_id, product_code, adminapps_error=None):
+        """Explicit demo/test fallback. It never grants global access."""
+        if product_code != 'MEDSUPPLIER':
+            return {
+                'allowed': False,
+                'organization_id': str(org_id),
+                'product_code': product_code,
+                'reason': 'local_fallback_product_not_supported',
+                'source': 'local_database',
+                'fallback': True,
+                'adminapps_error': adminapps_error or {},
+            }
+
+        try:
+            org = Organization.objects.get(id=org_id, is_active=True)
+        except (Organization.DoesNotExist, ValueError, TypeError):
+            return {
+                'allowed': False,
+                'organization_id': str(org_id),
+                'product_code': product_code,
+                'reason': 'organization_not_found',
+                'source': 'local_database',
+                'fallback': True,
+                'adminapps_error': adminapps_error or {},
+            }
+
+        try:
+            from medsupplier.models import MedSupplierUserScope
+            active_scopes = MedSupplierUserScope.objects.filter(
+                organization=org,
+                is_active=True,
+            ).count()
+        except Exception:
+            logger.exception("Error checking local MedSupplier scopes for org %s", org_id)
+            active_scopes = 0
+
+        allowed = active_scopes > 0
+        return {
+            'allowed': allowed,
+            'organization_id': str(org.id),
+            'organization_status': 'active' if org.is_active else 'inactive',
+            'product': {
+                'code': 'MEDSUPPLIER',
+                'enabled': allowed,
+                'status': 'demo_local_fallback' if allowed else 'missing_local_scope',
+                'is_active': allowed,
+                'access_allowed': allowed,
+                'access_denial_reason': 'ok' if allowed else 'no_local_medsupplier_scope',
+                'billing_status': 'demo_local_fallback',
+            },
+            'reason': 'ok' if allowed else 'no_local_medsupplier_scope',
+            'source': 'local_database',
+            'fallback': True,
+            'warning': 'Explicit demo/test fallback; not allowed in production and not a billing substitute.',
+            'active_medsupplier_scopes': active_scopes,
+            'adminapps_error': adminapps_error or {},
+        }
     
     def validate_credentials(self, email, password, organization_id=None):
         """
@@ -386,6 +496,7 @@ class AdminAppsClient:
             cache.delete(f'adminapps:organization:{org_id}')
             cache.delete(f'adminapps:organization:{org_id}:users')
             cache.delete(f'adminapps:organization:{org_id}:modules')
+            cache.delete(f'adminapps:organization:{org_id}:product:MEDSUPPLIER:validate')
         else:
             # Limpiar toda la caché de adminapps (requiere patrón de eliminación)
             cache.delete('adminapps:organizations')

@@ -31,3 +31,12 @@ class RequestIDMiddleware(MiddlewareMixin):
         if request_id:
             response['X-Request-ID'] = request_id
         return response
+
+
+class ProductionSecurityHeadersMiddleware(MiddlewareMixin):
+    """Apply explicit policy headers not covered by Django SecurityMiddleware."""
+
+    def process_response(self, request, response):
+        response.setdefault('Content-Security-Policy', "frame-ancestors 'none'")
+        response.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()')
+        return response
