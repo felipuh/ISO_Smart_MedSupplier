@@ -98,12 +98,13 @@ cd /home/felipe/proyectos/adminapps/backend
 - Proxy `/health` and `/ready` without authentication.
 - Keep application APIs protected by JWT/API-key controls.
 - Do not expose Django debug pages.
+- Validate the Nginx snippet from a real `http` context and define the `$connection_upgrade` map before enabling the site.
 
 ## Post-Deploy Smoke Tests
 
 ```bash
 cd /home/felipe/proyectos/ISO_Smart_MedSupplier
-backend/.venv312/bin/python backend/manage.py check_medsupplier_adminapps --organization-slug medsupplier-demo-e2e --settings=backend.settings
+backend/.venv312/bin/python backend/manage.py check_medsupplier_adminapps --organization-slug medsupplier-demo-e2e --no-fallback --settings=backend.settings
 cd frontend && npm run test:e2e:medsupplier
 ```
 
@@ -116,3 +117,4 @@ Go only if:
 - MedSupplier fallback is disabled in production.
 - Health/readiness probes pass.
 - Smoke tests pass or deviations are formally accepted.
+- Backup artifact/checksum, restore drill, rollback rehearsal, monitoring activation, and human approval are recorded before live controlled production.

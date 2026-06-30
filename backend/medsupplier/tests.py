@@ -1,9 +1,12 @@
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from datetime import date, timedelta
 from unittest.mock import patch
 import inspect
+from io import StringIO
 from rest_framework.test import APIClient
 from rest_framework import serializers as drf_serializers
 
@@ -770,6 +773,75 @@ class MedSupplierAdminAppsClientTests(TestCase):
         self.assertFalse(result['allowed'])
         self.assertEqual(result['source'], 'fail_closed')
         self.assertEqual(result['reason'], 'timeout')
+
+    @override_settings(
+        IS_PRODUCTION=False,
+        ADMIN_APPS_INTEGRATION={
+            'BASE_URL': 'http://adminapps.test/api/integration',
+            'API_KEY': 'test-key',
+            'TIMEOUT': 1,
+            'CACHE_TTL': 0,
+            'ALLOW_LOCAL_FALLBACK': True,
+        },
+    )
+    def test_adminapps_smoke_no_fallback_passes_with_direct_adminapps_access(self):
+        MedSupplierUserScope.objects.create(
+            user=self.user,
+            organization=self.org,
+            account=self.account,
+            side='supplier',
+            role='supplier_admin',
+        )
+        out = StringIO()
+
+        with patch(
+            'medsupplier.management.commands.check_medsupplier_adminapps.admin_apps_client.health_check',
+            return_value={'status': 'ok'},
+        ), patch(
+            'medsupplier.management.commands.check_medsupplier_adminapps.admin_apps_client.validate_product_access',
+            return_value={'allowed': True, 'reason': 'ok', 'source': 'adminapps'},
+        ):
+            call_command(
+                'check_medsupplier_adminapps',
+                organization_slug=self.org.slug,
+                no_fallback=True,
+                stdout=out,
+            )
+
+        self.assertIn('fallback_allowed=False', out.getvalue())
+        self.assertIn('product_access_source=adminapps', out.getvalue())
+
+    @override_settings(
+        IS_PRODUCTION=False,
+        ADMIN_APPS_INTEGRATION={
+            'BASE_URL': 'http://adminapps.test/api/integration',
+            'API_KEY': 'test-key',
+            'TIMEOUT': 1,
+            'CACHE_TTL': 0,
+            'ALLOW_LOCAL_FALLBACK': True,
+        },
+    )
+    def test_adminapps_smoke_no_fallback_rejects_local_fallback(self):
+        MedSupplierUserScope.objects.create(
+            user=self.user,
+            organization=self.org,
+            account=self.account,
+            side='supplier',
+            role='supplier_admin',
+        )
+
+        with patch(
+            'medsupplier.management.commands.check_medsupplier_adminapps.admin_apps_client.health_check',
+            return_value={'status': 'ok'},
+        ), patch(
+            'medsupplier.management.commands.check_medsupplier_adminapps.admin_apps_client.validate_product_access',
+            return_value={'allowed': True, 'reason': 'ok', 'source': 'local_database', 'fallback': True},
+        ), self.assertRaisesMessage(CommandError, 'fallback was used'):
+            call_command(
+                'check_medsupplier_adminapps',
+                organization_slug=self.org.slug,
+                no_fallback=True,
+            )
 
 
 class MedSupplierEndpointRoleMatrixTests(TestCase):

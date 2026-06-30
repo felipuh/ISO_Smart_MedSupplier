@@ -11,8 +11,14 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--organization-slug', default='medsupplier-demo-e2e')
         parser.add_argument('--organization-id', type=int, default=None)
+        parser.add_argument(
+            '--no-fallback',
+            action='store_true',
+            help='Fail if AdminApps cannot validate access directly. Required for target/staging/production smoke.',
+        )
 
     def handle(self, *args, **options):
+        fallback_allowed = not options['no_fallback']
         if options['organization_id']:
             organization = Organization.objects.filter(id=options['organization_id']).first()
         else:
@@ -26,6 +32,7 @@ class Command(BaseCommand):
             organization.id,
             'MEDSUPPLIER',
             use_cache=False,
+            allow_local_fallback=fallback_allowed,
         )
         active_scopes = MedSupplierUserScope.objects.filter(
             organization=organization,
@@ -38,10 +45,16 @@ class Command(BaseCommand):
 
         self.stdout.write(f'organization={organization.id} slug={organization.slug}')
         self.stdout.write(f'adminapps_available={adminapps_available}')
+        self.stdout.write(f'fallback_allowed={fallback_allowed}')
         self.stdout.write(f'product_access_source={product_access.get("source", "adminapps")}')
         self.stdout.write(f'medsupplier_entitlement_enabled={product_enabled}')
         self.stdout.write(f'medsupplier_access_reason={product_access.get("reason", "unknown")}')
         self.stdout.write(f'active_medsupplier_scopes={active_scopes}')
+
+        if options['no_fallback'] and fallback_source:
+            raise CommandError('AdminApps fallback was used while --no-fallback is required.')
+        if options['no_fallback'] and not adminapps_available:
+            raise CommandError('AdminApps is not available while --no-fallback is required.')
 
         if fallback_source:
             self.stdout.write(

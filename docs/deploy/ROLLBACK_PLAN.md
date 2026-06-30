@@ -69,3 +69,23 @@ Record:
 - Commit/config rolled back to.
 - Validation evidence.
 - Follow-up corrective action.
+
+## Rollback Rehearsal Evidence
+
+Before controlled production, record:
+
+| Field | Value |
+| --- | --- |
+| Environment |  |
+| Current release artifact/SHA |  |
+| Previous approved artifact/SHA |  |
+| Rehearsal type | redeploy previous artifact / config rollback / approved tabletop |
+| Operator |  |
+| Start/end time |  |
+| Health/readiness result |  |
+| AdminApps no-fallback smoke result |  |
+| Data rollback used | yes/no |
+| Approval |  |
+| Deviations |  |
+
+Do not approve live controlled production until rollback has either been rehearsed on the target environment or formally accepted by the release owner with documented risk.

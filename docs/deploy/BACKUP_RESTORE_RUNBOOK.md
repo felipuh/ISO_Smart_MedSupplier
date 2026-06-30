@@ -79,3 +79,22 @@ Each restore drill must record:
 - Start/end time.
 - Validation commands and result.
 - Known deviations.
+
+## Target Evidence Template
+
+| Field | Value |
+| --- | --- |
+| Environment |  |
+| Database engine/version |  |
+| Backup command |  |
+| Backup artifact path |  |
+| SHA256 checksum |  |
+| Operator |  |
+| Timestamp |  |
+| Restore target |  |
+| Restore command |  |
+| Validation result |  |
+| Deviations |  |
+| Approval |  |
+
+Controlled production cannot be approved until this table is completed for the approved target environment.

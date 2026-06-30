@@ -9,7 +9,7 @@ Group=felipe
 WorkingDirectory=/home/felipe/proyectos/ISO_Smart_MedSupplier/backend
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/home/felipe/proyectos/ISO_Smart_MedSupplier/backend/.env
-ExecStart=/home/felipe/proyectos/isosmart/backend/.venv312/bin/gunicorn --workers 2 --bind 127.0.0.1:8002 --access-logfile - --error-logfile - backend.wsgi:application
+ExecStart=/home/felipe/proyectos/ISO_Smart_MedSupplier/backend/.venv312/bin/gunicorn --workers 2 --bind 127.0.0.1:8002 --access-logfile - --error-logfile - backend.wsgi:application
 Restart=always
 RestartSec=5
 TimeoutStopSec=30

@@ -33,6 +33,7 @@ class AdminAppsClient:
         self.api_key = config.get('API_KEY', '')
         self.timeout = config.get('TIMEOUT', 10)
         self.cache_ttl = config.get('CACHE_TTL', 300)
+        self.forwarded_proto = str(config.get('FORWARDED_PROTO', 'https') or '').strip()
 
     def _local_fallback_allowed(self):
         config = getattr(settings, 'ADMIN_APPS_INTEGRATION', {})
@@ -40,10 +41,13 @@ class AdminAppsClient:
     
     def _get_headers(self):
         """Headers para las peticiones"""
-        return {
+        headers = {
             'X-API-Key': self.api_key,
             'Content-Type': 'application/json',
         }
+        if self.forwarded_proto:
+            headers['X-Forwarded-Proto'] = self.forwarded_proto
+        return headers
 
     def _resolve_adminapps_org_id(self, org_id):
         """Translate local organization IDs to AdminApps external IDs when available."""
@@ -346,7 +350,7 @@ class AdminAppsClient:
             logger.exception(f"Error al obtener módulos locales para org {org_id}: {e}")
             return {'error': str(e), 'code': 'local_error'}
 
-    def validate_product_access(self, org_id, product_code, use_cache=True):
+    def validate_product_access(self, org_id, product_code, use_cache=True, allow_local_fallback=None):
         """Validate product-neutral access against AdminApps; fail closed by default."""
         normalized_code = str(product_code or '').strip().upper()
         adminapps_org_id = self._resolve_adminapps_org_id(org_id)
@@ -371,7 +375,12 @@ class AdminAppsClient:
             return result
 
         # Transport/service errors can use explicit local fallback in test/demo only.
-        if 'error' in result and self._local_fallback_allowed():
+        fallback_allowed = (
+            self._local_fallback_allowed()
+            if allow_local_fallback is None
+            else bool(allow_local_fallback) and not getattr(settings, 'IS_PRODUCTION', False)
+        )
+        if 'error' in result and fallback_allowed:
             logger.warning(
                 "AdminApps product validation failed for org=%s product=%s; using explicit local fallback: %s",
                 org_id,
