@@ -98,3 +98,35 @@ Each restore drill must record:
 | Approval |  |
 
 Controlled production cannot be approved until this table is completed for the approved target environment.
+
+## Local Replica PostgreSQL Procedure
+
+This server is used as a PostgreSQL local replica and future VPS bridge. Do not use SQLite artifacts as replica evidence.
+
+Backup:
+
+```bash
+scripts/operations/backup_replica.sh
+```
+
+Restore drill:
+
+```bash
+scripts/operations/restore_drill_postgres.sh ops_artifacts/backups/<postgres-dump>.dump
+```
+
+If the application database role cannot create databases, create an empty restore database as DBA/ops first:
+
+```bash
+createdb -O isosmart medsupplier_restore_drill_<timestamp>
+RESTORE_DB_NAME=medsupplier_restore_drill_<timestamp> RESTORE_DB_PRECREATED=true \
+  scripts/operations/restore_drill_postgres.sh ops_artifacts/backups/<postgres-dump>.dump
+```
+
+Expected evidence:
+- PostgreSQL custom dump.
+- Media archive.
+- SHA256 checksum.
+- Restore drill report.
+- `manage.py check` against restored DB.
+- `manage.py migrate --plan` against restored DB.

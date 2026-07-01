@@ -452,3 +452,82 @@ New evidence:
 - `docs/release/PILOT_COMMERCIAL_PACKAGE_EVIDENCE.md`
 - `docs/release/ISOSMART_JOINT_SALE_READINESS_NOTE.md`
 - `docs/release/GO_TO_PILOT_REPORT.md`
+
+## 15. Addendum - Local Replica And VPS Bridge
+
+Date: 2026-06-30
+
+This server has been prepared as a PostgreSQL local replica and bridge toward a near-future DigitalOcean VPS.
+
+Completed:
+- PostgreSQL runtime confirmed for MedSupplier `backend.settings`.
+- PostgreSQL backup artifact generated.
+- SHA256 checksum generated.
+- Media artifact generated.
+- MedSupplier/AdminApps no-fallback smoke passed using `backend.settings`.
+- `/health` and `/ready` passed on the local backend.
+- Frontend lint/build passed in replica smoke.
+- Rollback tabletop completed.
+- Tenant `medsupplier-demo-e2e` linked to the AdminApps MEDSUPPLIER entitlement.
+
+Evidence:
+- `docs/release/LOCAL_REPLICA_OPERATIONAL_READINESS_REPORT.md`
+- `ops_artifacts/backups/medsupplier_postgres_20260630_133620.dump`
+- `ops_artifacts/backups/medsupplier_20260630_133620.sha256`
+- `ops_artifacts/smoke/replica_smoke_report.txt`
+- `ops_artifacts/rollback/rollback_tabletop_report.txt`
+- `docs/deploy/DBA_RESTORE_DRILL_HANDOFF.md`
+- `docs/deploy/DIGITALOCEAN_VPS_BRIDGE_CHECKLIST.md`
+
+Remaining:
+- PostgreSQL restore drill is blocked until an operator with DB admin privileges creates an empty restore database owned by `isosmart`, or the VPS target role is granted controlled restore-drill database creation.
+- DNS/domain and SSL/TLS remain pending.
+- Real VPS rollback rehearsal and human approval remain pending.
+
+## 16. Addendum - Stage 15 Controlled RC Readiness
+
+Date: 2026-06-30
+
+Stage 15 completed: Release Candidate / Controlled Go-Live Readiness.
+
+Decision:
+- Controlled commercial Release Candidate: GO WITH RESTRICTIONS.
+- Live controlled production: NOT APPROVED until target gates execute.
+- Formal regulated production: NOT APPROVED.
+
+Updated readiness:
+- Controlled demo: PASS, 100%.
+- Paid pilot: PASS WITH RESTRICTIONS, 96%.
+- Controlled enterprise MVP: PASS WITH RESTRICTIONS, 92%.
+- Local PostgreSQL replica / VPS bridge: PASS WITH RESTRICTION, 92%.
+- Live controlled production: PASS WITH RESTRICTIONS / target gates not executed, 74%.
+- Formal regulated production: FAIL / not approved, 35%.
+
+Stage 15 evidence:
+- `docs/release/GO_LIVE_READINESS_REPORT.md`
+- `docs/release/RELEASE_NOTES_RC.md`
+- `docs/deploy/RESTORE_DRILL_RUNBOOK.md`
+- `docs/deploy/DNS_SSL_GO_LIVE_RUNBOOK.md`
+- `docs/deploy/VPS_ROLLBACK_REHEARSAL_RUNBOOK.md`
+- `docs/deploy/MONITORING_ALERTING_RUNBOOK.md`
+- `docs/release/HUMAN_APPROVAL_GATE.md`
+- `docs/release/CHECKLIST_RELEASE_CANDIDATE.md`
+
+Executed checks:
+- MedSupplier PostgreSQL backend check passed.
+- MedSupplier migration drift check passed.
+- MedSupplier migration plan has no operations.
+- AdminApps no-fallback smoke passed.
+- AdminApps backend check passed.
+- Backup checksum validation passed.
+- Frontend lint/build passed.
+- Deploy check passed with only HSTS preload warning.
+
+Real blockers:
+- PostgreSQL restore drill requires DBA-created restore database.
+- DNS/domain requires final VPS IP/domain.
+- SSL/TLS requires DNS propagation.
+- VPS rollback rehearsal requires VPS and previous approved artifact.
+- VPS monitoring/alerting requires target activation.
+- Human approval is pending.
+- Commit/tag is pending release owner approval.
