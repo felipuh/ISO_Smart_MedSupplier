@@ -1,4 +1,6 @@
 import json
+import sys
+import types
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -37,6 +39,12 @@ class _FakeErrorResponse:
 
     def iter_lines(self):
         return iter(())
+
+
+class _FakeVectorSearchService:
+    @staticmethod
+    def search(*_args, **_kwargs):
+        return []
 
 
 class AssistantApiTests(TestCase):
@@ -104,8 +112,11 @@ class AssistantApiTests(TestCase):
             captured_payloads.append(json)
             return _FakeStreamContext(_FakeStreamResponse())
 
-        with patch('integration.views.httpx.stream', side_effect=fake_stream), patch(
-            'integration.views.AssistantVectorSearchService.search', return_value=[]
+        fake_vector_store = types.ModuleType('integration.services.vector_store')
+        fake_vector_store.AssistantVectorSearchService = _FakeVectorSearchService
+
+        with patch.dict(sys.modules, {'integration.services.vector_store': fake_vector_store}), patch(
+            'integration.views.httpx.stream', side_effect=fake_stream
         ), patch.multiple(
             'integration.views.settings',
             AI_ASSISTANT_API_KEY='test-key',
