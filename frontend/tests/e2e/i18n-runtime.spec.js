@@ -6,36 +6,27 @@ const PASSWORD = process.env.TEST_PASSWORD || 'Admin@123456';
 const LANGS = [
   {
     code: 'es-LATAM',
-    loginSubtitle: 'Sistema de Gestión de Calidad',
+    loginSubtitle: 'Torre Supplier-Customer regulada',
     loginButton: 'Iniciar Sesión',
-    dashboardTitle: 'Sistema Inteligente de Gestión de Calidad',
-    onboardingTitle: 'Configuración Inicial',
-    companySizeLabel: 'Rango de tamaño de empresa',
-    companySizeFirstOption: '10 a 50',
-    onboardingNext: 'Continuar',
-    onboardingCreate: 'Crear mi sistema',
+    productStatus: 'Producto MedSupplier independiente',
+    languageOption: 'Español',
+    navigationLabel: 'Proveedores',
   },
   {
     code: 'en',
-    loginSubtitle: 'Quality Management System',
+    loginSubtitle: 'Regulated Supplier-Customer Control Tower',
     loginButton: 'Sign In',
-    dashboardTitle: 'Intelligent Quality Management System',
-    onboardingTitle: 'Initial Setup',
-    companySizeLabel: 'Company size range',
-    companySizeFirstOption: '10 to 50',
-    onboardingNext: 'Continue',
-    onboardingCreate: 'Create my system',
+    productStatus: 'Independent MedSupplier product',
+    languageOption: 'English',
+    navigationLabel: 'Suppliers',
   },
   {
     code: 'pt',
-    loginSubtitle: 'Sistema de Gestão da Qualidade',
+    loginSubtitle: 'Torre Supplier-Customer regulada',
     loginButton: 'Entrar',
-    dashboardTitle: 'Sistema Inteligente de Gestão da Qualidade',
-    onboardingTitle: 'Configuração Inicial',
-    companySizeLabel: 'Faixa de tamanho da empresa',
-    companySizeFirstOption: '10 a 50',
-    onboardingNext: 'Continuar',
-    onboardingCreate: 'Criar meu sistema',
+    productStatus: 'Produto MedSupplier independente',
+    languageOption: 'Português',
+    navigationLabel: 'Fornecedores',
   },
 ];
 
@@ -78,11 +69,11 @@ async function getLanguageSelect(page) {
     return headerLanguageSelect;
   }
 
-  const onboardingLanguageSelect = page.locator('select').filter({
+  const anyLanguageSelect = page.locator('select').filter({
     has: page.locator('option[value="es-LATAM"]'),
   }).first();
-  if (await onboardingLanguageSelect.count()) {
-    return onboardingLanguageSelect;
+  if (await anyLanguageSelect.count()) {
+    return anyLanguageSelect;
   }
 
   return null;
@@ -116,15 +107,12 @@ for (const lang of LANGS) {
     await login(page);
     await applyLanguage(page, lang.code);
 
-    if (page.url().includes('/onboarding')) {
-      await expect(page.getByText(lang.onboardingTitle)).toBeVisible();
-    } else {
-      await expect(page).not.toHaveURL(/\/onboarding$/);
-      await expect(page.locator('h1, h2').first()).toBeVisible({ timeout: 45000 });
-    }
+    await expect(page).toHaveURL(/\/medsupplier/);
+    await expect(page.getByText(lang.productStatus)).toBeVisible({ timeout: 45000 });
+    await expect(page.getByRole('link', { name: new RegExp(lang.navigationLabel) }).first()).toBeVisible();
   });
 
-  test(`i18n runtime ${lang.code} forced onboarding`, async ({ browser }) => {
+  test(`i18n runtime ${lang.code} persisted MedSupplier preference`, async ({ browser }) => {
     const context = await browser.newContext({
       extraHTTPHeaders: {
         'X-ISO-LOCAL-AUTH-BYPASS': '1',
@@ -132,36 +120,24 @@ for (const lang of LANGS) {
     });
     const page = await context.newPage();
 
-    await context.route('**/settings/onboarding_status/**', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ onboarding_completed: false }),
-      });
-    });
-
     await page.addInitScript((selectedLang) => {
       localStorage.setItem('isosmart_language', selectedLang);
     }, lang.code);
 
     await page.goto('/login');
+    await expect(page.getByText(lang.loginSubtitle)).toBeVisible();
     await login(page);
     await applyLanguage(page, lang.code);
 
-    await expect(page).toHaveURL(/\/onboarding$/);
-    await expect(page.getByText(lang.onboardingTitle)).toBeVisible();
+    await expect(page.getByText(lang.productStatus)).toBeVisible({ timeout: 45000 });
+    await expect(page.locator('header select').first()).toContainText(lang.languageOption);
 
-    await page.getByRole('button', { name: lang.onboardingNext }).click();
-    await expect(page.getByText(lang.companySizeLabel)).toBeVisible();
+    await page.reload();
 
-    const firstOption = page
-      .locator(`label:has-text("${lang.companySizeLabel}") select option`)
-      .first();
-    await expect(firstOption).toContainText(lang.companySizeFirstOption);
-
-    await page.getByRole('button', { name: lang.onboardingNext }).click();
-    await page.getByRole('button', { name: lang.onboardingNext }).click();
-    await expect(page.getByRole('button', { name: lang.onboardingCreate })).toBeVisible();
+    await expect.poll(async () => page.evaluate(() => document.documentElement.lang), {
+      timeout: 45000,
+    }).toBe(lang.code);
+    await expect(page.getByText(lang.productStatus)).toBeVisible({ timeout: 45000 });
 
     await context.close();
   });

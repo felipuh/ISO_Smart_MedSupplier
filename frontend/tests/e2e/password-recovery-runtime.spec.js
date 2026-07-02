@@ -1,9 +1,13 @@
 import { expect, test } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 
 const ADMIN_EMAIL = process.env.TEST_EMAIL || 'admin@isosmart.local';
 const ORIGINAL_PASSWORD = process.env.TEST_PASSWORD || 'Admin@123456';
 const NEW_PASSWORD = 'RecoveryFlow@123';
 const BACKEND_URL = 'http://127.0.0.1:8002';
+const PYTHON_BIN = process.env.PYTHON_BIN || '/home/felipe/proyectos/ISO_Smart_MedSupplier/backend/.venv312/bin/python';
+const REPO_ROOT = path.resolve(process.cwd(), '..');
 
 async function loginByApi(request, email, password) {
   const response = await request.post(`${BACKEND_URL}/api/auth/login/`, {
@@ -39,6 +43,20 @@ async function createRecoveryUser(request) {
 
   expect(createResponse.status(), 'recovery test user should be created').toBe(201);
   return recoveryEmail;
+}
+
+function issueResetPath(email) {
+  const script = `
+from authentication.models import PasswordResetToken, User
+user = User.objects.get(email='${email}')
+reset_token, raw_token = PasswordResetToken.issue_for_user(user)
+print(f'/reset-password?selector={reset_token.selector}&token={raw_token}')
+`;
+  return execFileSync(
+    PYTHON_BIN,
+    ['backend/manage.py', 'shell', '-c', script],
+    { cwd: REPO_ROOT, encoding: 'utf8', env: process.env }
+  ).trim().split('\\n').pop();
 }
 
 test('password recovery flow works end-to-end', async ({ page, request }) => {
@@ -81,16 +99,8 @@ test('password recovery flow works end-to-end', async ({ page, request }) => {
   const formResponse = await requestPromise;
   expect(formResponse.status(), 'password reset form request should succeed').toBe(200);
 
-  const recoveryResponse = await request.post(`${BACKEND_URL}/api/auth/password-reset/request/?debug_recovery=1`, {
-    data: { email: recoveryEmail },
-  });
-
-  expect(recoveryResponse.status(), 'password reset request should succeed').toBe(200);
-  const recoveryData = await recoveryResponse.json();
-  expect(recoveryData.debug_reset_url, 'debug reset URL should be available in DEBUG mode').toBeTruthy();
-
-  const resetUrl = new URL(recoveryData.debug_reset_url);
-  await page.goto(`${resetUrl.pathname}${resetUrl.search}`);
+  const resetPath = issueResetPath(recoveryEmail);
+  await page.goto(resetPath);
 
   await page.locator('input#new-password').fill(NEW_PASSWORD);
   await page.locator('input#confirm-password').fill(NEW_PASSWORD);

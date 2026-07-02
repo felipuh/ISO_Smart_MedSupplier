@@ -33,6 +33,18 @@ const api = axios.create({
   },
 });
 
+const AUTH_PUBLIC_PATHS = [
+  '/auth/login/',
+  '/auth/refresh/',
+  '/auth/password-reset/request/',
+  '/auth/password-reset/confirm/',
+];
+
+const isPublicAuthRequest = (url = '') => {
+  const normalizedUrl = String(url);
+  return AUTH_PUBLIC_PATHS.some((path) => normalizedUrl.endsWith(path) || normalizedUrl.includes(path));
+};
+
 // Flag para evitar múltiples refreshes simultáneos
 let isRefreshing = false;
 let failedQueue = [];
@@ -51,6 +63,11 @@ const processQueue = (error, token = null) => {
 // Interceptor de request - agregar token
 api.interceptors.request.use(
   (config) => {
+    if (isPublicAuthRequest(config.url)) {
+      delete config.headers.Authorization;
+      return config;
+    }
+
     const token = localStorage.getItem('access_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -69,7 +86,7 @@ api.interceptors.response.use(
     const originalRequest = error.config;
 
     // Si el error no es 401 o ya intentamos refresh, rechazar
-    if (error.response?.status !== 401 || originalRequest._retry) {
+    if (error.response?.status !== 401 || originalRequest._retry || isPublicAuthRequest(originalRequest?.url)) {
       return Promise.reject(error);
     }
 

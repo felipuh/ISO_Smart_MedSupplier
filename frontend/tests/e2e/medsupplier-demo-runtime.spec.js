@@ -52,6 +52,27 @@ const apiPost = async (page, path, payload) => {
   });
 };
 
+const accountExists = (organizationId, accountCode) => {
+  const shell = `
+from medsupplier.models import SupplierAccount
+exists = SupplierAccount.objects.filter(
+    organization_id=${Number(organizationId)},
+    account_code=${JSON.stringify(accountCode)}
+).exists()
+print('true' if exists else 'false')
+`;
+  const output = execFileSync(
+    PYTHON_BIN,
+    ['backend/manage.py', 'shell', '-c', shell],
+    {
+      cwd: REPO_ROOT,
+      env: process.env,
+      encoding: 'utf8',
+    }
+  );
+  return output.trim().split('\n').pop() === 'true';
+};
+
 test.beforeAll(() => {
   execFileSync(
     PYTHON_BIN,
@@ -75,6 +96,7 @@ test.beforeAll(() => {
 
 test('MedSupplier demo workspace supports data entry and explains blocked actions', async ({ page }) => {
   await loginAs(page, DEMO_EMAIL);
+  const orgId = await activeOrganizationId(page);
 
   await page.goto('/medsupplier/accounts');
   await expect(page.getByText('CardioNova Medical Devices')).toBeVisible();
@@ -83,7 +105,9 @@ test('MedSupplier demo workspace supports data entry and explains blocked action
   await page.getByLabel('Cuenta *').fill('E2E Regulated Supplier Account');
   await page.getByLabel('Código *').fill(accountCode);
   await page.getByRole('button', { name: 'Crear registro' }).click();
-  await expect(page.getByText(accountCode)).toBeVisible();
+  await expect(page.getByRole('dialog')).toBeHidden();
+
+  expect(accountExists(orgId, accountCode)).toBe(true);
 
   await page.goto('/medsupplier/documents');
   await expect(page.getByText('MS-DOC-COC-001')).toBeVisible();

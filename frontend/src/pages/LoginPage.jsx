@@ -19,6 +19,17 @@ const LoginPage = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const showLocalDemoAccess = typeof window !== 'undefined'
+    && (
+      ['localhost', '127.0.0.1'].includes(window.location.hostname)
+      || window.location.hostname.endsWith('.local')
+    );
+
+  const fillLocalDemoCredentials = () => {
+    setEmail('medsupplier.e2e@smart3ai.local');
+    setPassword('MedSupplierDemo@123');
+    setError('');
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -198,6 +209,16 @@ const LoginPage = () => {
                 </>
               )}
             </button>
+
+            {showLocalDemoAccess && (
+              <button
+                type="button"
+                onClick={fillLocalDemoCredentials}
+                className="w-full py-2.5 px-4 border border-slate-600/70 hover:border-cyan-500/70 text-slate-200 hover:text-white font-medium rounded-lg transition-colors"
+              >
+                Usar credenciales demo locales
+              </button>
+            )}
           </form>
 
           {/* Footer */}

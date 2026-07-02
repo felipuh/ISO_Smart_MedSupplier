@@ -14,6 +14,7 @@ import CrudErrorBanner from '../../../components/Common/CrudErrorBanner';
 import CrudEmptyState from '../../../components/Common/CrudEmptyState';
 import CrudPageHeader from '../../../components/Common/CrudPageHeader';
 import { useAuth } from '../../../context/AuthContext';
+import { useI18n } from '../../../context/I18nContext';
 import medsupplierService from '../../../services/medsupplierService';
 import { medsupplierSections } from '../medsupplierSections';
 
@@ -51,8 +52,11 @@ const FlowStep = ({ label, active }) => (
   </div>
 );
 
+const normalizeValueKey = (value) => String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+
 const MedSupplierDashboard = () => {
   const { currentOrganization } = useAuth();
+  const { t } = useI18n();
   const organizationId = currentOrganization?.id;
   const [summary, setSummary] = useState(null);
   const [accounts, setAccounts] = useState([]);
@@ -75,35 +79,39 @@ const MedSupplierDashboard = () => {
       setPermissions(permissionData);
     } catch (err) {
       console.error('Error loading ISO Smart MedSupplier:', err);
-      setError('No se pudo cargar ISO Smart MedSupplier.');
+      setError(t('medsupplier.workspace.loadError', { section: t('medsupplier.productName') }));
     } finally {
       setLoading(false);
     }
-  }, [organizationId]);
+  }, [organizationId, t]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
   const flow = useMemo(() => ([
-    'Cuenta/cliente',
-    'Reuniones',
-    'Requisitos',
-    'Documentos',
-    'RFQ/cotización',
-    'PO',
-    'Lote',
-    'Shipment',
-    'Inspección',
-    'NCR/CAPA',
-    'Scorecard/QBR',
-  ]), []);
+    t('medsupplier.dashboard.flow.account'),
+    t('medsupplier.dashboard.flow.meetings'),
+    t('medsupplier.dashboard.flow.requirements'),
+    t('medsupplier.dashboard.flow.documents'),
+    t('medsupplier.dashboard.flow.rfq'),
+    t('medsupplier.dashboard.flow.po'),
+    t('medsupplier.dashboard.flow.lot'),
+    t('medsupplier.dashboard.flow.shipment'),
+    t('medsupplier.dashboard.flow.inspection'),
+    t('medsupplier.dashboard.flow.capa'),
+    t('medsupplier.dashboard.flow.scorecard'),
+  ]), [t]);
 
   const visibleSections = useMemo(() => (
     medsupplierSections.filter((section) => (
       !section.requiresPermission || permissions?.permissions?.[section.requiresPermission]
     ))
   ), [permissions]);
+
+  const translateSectionLabel = (section) => t(`medsupplier.sections.${section.key}.label`, section.label);
+  const translateSectionDescription = (section) => t(`medsupplier.sections.${section.key}.description`, section.description);
+  const translateValue = (value) => t(`medsupplier.values.${normalizeValueKey(value)}`, value || t('medsupplier.workspace.notAvailable'));
 
   if (loading) {
     return (
@@ -116,24 +124,24 @@ const MedSupplierDashboard = () => {
   return (
     <div className="space-y-6">
       <CrudPageHeader
-        title="ISO Smart MedSupplier"
-        subtitle={`Torre de control regulada Supplier-Customer. Vista activa: ${permissions?.side || summary?.side || 'scope'} / ${permissions?.role || summary?.role || 'rol pendiente'}.`}
+        title={t('medsupplier.productName')}
+        subtitle={t('medsupplier.dashboard.subtitle', { side: permissions?.side || summary?.side || t('medsupplier.dashboard.fallbackSide'), role: permissions?.role || summary?.role || t('medsupplier.dashboard.fallbackRole') })}
       />
 
       <CrudErrorBanner message={error} onClose={() => setError('')} />
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatTile icon={Users} label="Cuentas activas" value={summary?.active_accounts ?? 0} tone="blue" />
-        <StatTile icon={ClipboardCheck} label="Acciones abiertas" value={summary?.open_actions ?? 0} tone="amber" />
-        <StatTile icon={AlertTriangle} label="Eventos de calidad" value={summary?.open_quality_events ?? 0} tone="rose" />
-        <StatTile icon={Gauge} label="Scorecard promedio" value={Number(summary?.average_scorecard || 0).toFixed(1)} tone="emerald" />
+        <StatTile icon={Users} label={t('medsupplier.dashboard.stats.activeAccounts')} value={summary?.active_accounts ?? 0} tone="blue" />
+        <StatTile icon={ClipboardCheck} label={t('medsupplier.dashboard.stats.openActions')} value={summary?.open_actions ?? 0} tone="amber" />
+        <StatTile icon={AlertTriangle} label={t('medsupplier.dashboard.stats.qualityEvents')} value={summary?.open_quality_events ?? 0} tone="rose" />
+        <StatTile icon={Gauge} label={t('medsupplier.dashboard.stats.averageScorecard')} value={Number(summary?.average_scorecard || 0).toFixed(1)} tone="emerald" />
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 xl:col-span-2">
           <div className="mb-4 flex items-center gap-2">
             <ShieldCheck className="h-5 w-5 text-blue-600 dark:text-blue-300" />
-            <h2 className="text-lg font-semibold text-slate-950 dark:text-white">Flujo regulado Supplier-Customer</h2>
+            <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{t('medsupplier.dashboard.flowTitle')}</h2>
           </div>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
             {flow.map((step, index) => (
@@ -145,19 +153,19 @@ const MedSupplierDashboard = () => {
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="mb-4 flex items-center gap-2">
             <FileText className="h-5 w-5 text-blue-600 dark:text-blue-300" />
-            <h2 className="text-lg font-semibold text-slate-950 dark:text-white">Visibilidad</h2>
+            <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{t('medsupplier.dashboard.visibilityTitle')}</h2>
           </div>
           <div className="space-y-3">
             <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800">
-              <span className="text-sm text-slate-600 dark:text-slate-300">Registros compartidos</span>
+              <span className="text-sm text-slate-600 dark:text-slate-300">{t('medsupplier.dashboard.sharedRecords')}</span>
               <span className="font-semibold text-slate-950 dark:text-white">{summary?.shared_records ?? 0}</span>
             </div>
             <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800">
-              <span className="text-sm text-slate-600 dark:text-slate-300">Registros privados</span>
+              <span className="text-sm text-slate-600 dark:text-slate-300">{t('medsupplier.dashboard.privateRecords')}</span>
               <span className="font-semibold text-slate-950 dark:text-white">{summary?.private_records ?? 0}</span>
             </div>
             <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800">
-              <span className="text-sm text-slate-600 dark:text-slate-300">RFQ/cotizaciones</span>
+              <span className="text-sm text-slate-600 dark:text-slate-300">{t('medsupplier.dashboard.rfqs')}</span>
               <span className="font-semibold text-slate-950 dark:text-white">{summary?.rfqs ?? 0}</span>
             </div>
           </div>
@@ -167,7 +175,7 @@ const MedSupplierDashboard = () => {
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="mb-4 flex items-center gap-2">
           <ShieldCheck className="h-5 w-5 text-blue-600 dark:text-blue-300" />
-          <h2 className="text-lg font-semibold text-slate-950 dark:text-white">Workspace MedSupplier</h2>
+          <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{t('medsupplier.dashboard.workspaceTitle')}</h2>
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           {visibleSections.filter((section) => section.key !== 'accounts').slice(0, 12).map((section) => {
@@ -179,8 +187,8 @@ const MedSupplierDashboard = () => {
                 className="rounded-lg border border-slate-200 p-4 transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:hover:border-blue-800 dark:hover:bg-blue-950/30"
               >
                 <SectionIcon className="mb-2 h-5 w-5 text-blue-700 dark:text-blue-200" />
-                <p className="font-semibold text-slate-950 dark:text-white">{section.label}</p>
-                <p className="mt-1 line-clamp-2 text-sm text-slate-500 dark:text-slate-400">{section.description}</p>
+                <p className="font-semibold text-slate-950 dark:text-white">{translateSectionLabel(section)}</p>
+                <p className="mt-1 line-clamp-2 text-sm text-slate-500 dark:text-slate-400">{translateSectionDescription(section)}</p>
               </Link>
             );
           })}
@@ -191,22 +199,22 @@ const MedSupplierDashboard = () => {
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <PackageCheck className="h-5 w-5 text-blue-600 dark:text-blue-300" />
-            <h2 className="text-lg font-semibold text-slate-950 dark:text-white">Cliente 360 básico</h2>
+            <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{t('medsupplier.dashboard.customer360Title')}</h2>
           </div>
           <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
             <Truck className="h-4 w-4" />
-            {summary?.shipments_in_transit ?? 0} shipments en tránsito
+            {t('medsupplier.dashboard.shipmentsInTransit', { count: summary?.shipments_in_transit ?? 0 })}
           </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-slate-100 dark:bg-slate-800/60">
               <tr>
-                <th className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">Cuenta</th>
-                <th className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">Código</th>
-                <th className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">Estado</th>
-                <th className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">Riesgo</th>
-                <th className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">Visibilidad</th>
+                <th className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">{t('medsupplier.columns.name')}</th>
+                <th className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">{t('medsupplier.columns.account_code')}</th>
+                <th className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">{t('medsupplier.columns.status')}</th>
+                <th className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">{t('medsupplier.columns.risk_level')}</th>
+                <th className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">{t('medsupplier.columns.visibility')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -214,12 +222,12 @@ const MedSupplierDashboard = () => {
                 <tr key={account.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/60">
                   <td className="px-5 py-4 text-sm font-medium text-slate-950 dark:text-white">{account.name}</td>
                   <td className="px-5 py-4 text-sm text-slate-600 dark:text-slate-300">{account.account_code}</td>
-                  <td className="px-5 py-4 text-sm text-slate-600 dark:text-slate-300">{account.status}</td>
-                  <td className="px-5 py-4 text-sm text-slate-600 dark:text-slate-300">{account.risk_level}</td>
-                  <td className="px-5 py-4 text-sm text-slate-600 dark:text-slate-300">{account.visibility}</td>
+                  <td className="px-5 py-4 text-sm text-slate-600 dark:text-slate-300">{translateValue(account.status)}</td>
+                  <td className="px-5 py-4 text-sm text-slate-600 dark:text-slate-300">{translateValue(account.risk_level)}</td>
+                  <td className="px-5 py-4 text-sm text-slate-600 dark:text-slate-300">{translateValue(account.visibility)}</td>
                 </tr>
               ))}
-              {accounts.length === 0 && <CrudEmptyState colSpan={5} message="No hay cuentas Supplier-Customer registradas." />}
+              {accounts.length === 0 && <CrudEmptyState colSpan={5} message={t('medsupplier.dashboard.emptyAccounts')} />}
             </tbody>
           </table>
         </div>

@@ -37,6 +37,20 @@ const UserMenu = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+        setShowOrgSelector(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isOpen]);
+
   const handleLogout = async () => {
     await logout();
     navigate('/login');
@@ -73,8 +87,13 @@ const UserMenu = () => {
     <div className="relative" ref={menuRef}>
       {/* Botón del menú */}
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
+        aria-label={t('auth.userMenu.profile')}
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        aria-controls="user-menu-panel"
       >
         {/* Avatar */}
         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center text-white font-semibold shadow-lg shadow-cyan-500/20">
@@ -104,7 +123,7 @@ const UserMenu = () => {
 
       {/* Menú desplegable */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-72 bg-white/95 dark:bg-slate-800/95 backdrop-blur-xl border border-slate-200 dark:border-slate-700/50 rounded-xl shadow-2xl overflow-hidden z-50">
+        <div id="user-menu-panel" role="menu" className="absolute right-0 mt-2 w-72 bg-white/95 dark:bg-slate-800/95 backdrop-blur-xl border border-slate-200 dark:border-slate-700/50 rounded-xl shadow-2xl overflow-hidden z-50">
           {/* Header del menú */}
           <div className="p-4 border-b border-slate-200 dark:border-slate-700/50">
             <div className="flex items-center gap-3">
@@ -129,8 +148,10 @@ const UserMenu = () => {
           {organizations.length > 1 && (
             <div className="p-2 border-b border-slate-200 dark:border-slate-700/50">
               <button
+                type="button"
                 onClick={() => setShowOrgSelector(!showOrgSelector)}
                 className="w-full flex items-center justify-between p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors text-left"
+                aria-expanded={showOrgSelector}
               >
                 <div className="flex items-center gap-2">
                   <svg className="w-5 h-5 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -153,6 +174,7 @@ const UserMenu = () => {
                 <div className="mt-1 space-y-1">
                   {organizations.map((org) => (
                     <button
+                      type="button"
                       key={org.id}
                       onClick={() => handleSwitchOrg(org.id)}
                       disabled={org.is_current}
@@ -212,6 +234,7 @@ const UserMenu = () => {
             <hr className="my-2 border-slate-200 dark:border-slate-700/50" />
 
             <button
+              type="button"
               onClick={handleLogout}
               className="w-full flex items-center gap-2 p-2 rounded-lg hover:bg-red-500/20 transition-colors text-red-400"
             >

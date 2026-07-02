@@ -1,8 +1,12 @@
 import { expect, test } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 
 const ADMIN_EMAIL = process.env.TEST_EMAIL || 'admin@isosmart.local';
 const ADMIN_PASSWORD = process.env.TEST_PASSWORD || 'Admin@123456';
 const BACKEND_URL = 'http://127.0.0.1:8002';
+const PYTHON_BIN = process.env.PYTHON_BIN || '/home/felipe/proyectos/ISO_Smart_MedSupplier/backend/.venv312/bin/python';
+const REPO_ROOT = path.resolve(process.cwd(), '..');
 
 async function apiLogin(request, email, password) {
   const response = await request.post(`${BACKEND_URL}/api/auth/login/`, {
@@ -34,7 +38,22 @@ async function createUserWithRole(request, role, organizationId, adminAccessToke
   });
 
   expect(response.status(), `user creation should succeed for role ${role}`).toBe(201);
+  clearMustChangePassword(email);
   return { email, password, role };
+}
+
+function clearMustChangePassword(email) {
+  const script = `
+from authentication.models import User
+user = User.objects.get(email='${email}')
+user.clear_temporary_password_flag()
+user.save(update_fields=['must_change_password', 'temporary_password_set_at'])
+`;
+  execFileSync(
+    PYTHON_BIN,
+    ['backend/manage.py', 'shell', '-c', script],
+    { cwd: REPO_ROOT, stdio: 'ignore', env: process.env }
+  );
 }
 
 async function loginInUi(page, email, password) {
@@ -67,7 +86,7 @@ test('settings access is enforced by role (org_admin/iso_manager allowed)', asyn
   await page.goto('/settings');
 
   await expect(page).toHaveURL(/\/settings/);
-  await expect(page.getByRole('heading', { name: 'Configuración', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Configuración|Settings/i }).first()).toBeVisible();
 });
 
 test('settings access is denied for viewer/auditor/user roles', async ({ page, request }) => {
@@ -82,7 +101,7 @@ test('settings access is denied for viewer/auditor/user roles', async ({ page, r
     await loginInUi(page, roleUser.email, roleUser.password);
     await page.goto('/settings');
 
-    await expect(page.getByText('org_admin, iso_manager')).toBeVisible();
     await expect(page.getByRole('heading', { name: /Acceso Denegado|Access Denied/i })).toBeVisible();
+    await expect(page.getByText(/org_admin, iso_manager/i)).toBeVisible();
   }
 });

@@ -24,37 +24,31 @@ async function login(page) {
   });
 }
 
-test('scope and processes dashboards load with tenant protections', async ({ page }) => {
+test('legacy scope/process routes resolve safely and MedSupplier endpoints keep tenant protections', async ({ page }) => {
   await login(page);
 
   const token = await page.evaluate(() => localStorage.getItem('access_token'));
   expect(token, 'access token should be present after login').toBeTruthy();
 
   await page.goto('/scope');
-  const scopeLatest = await page.waitForResponse(
-    (response) => response.url().includes('/api/scope/latest/') && response.request().method() === 'GET',
-    { timeout: 45000 }
-  );
-  expect(scopeLatest.status(), 'scope latest should not fail').toBe(200);
+  await expect(page).toHaveURL(/\/medsupplier/);
+  await expect(page.getByRole('heading', { name: /ISO Smart MedSupplier/i }).first()).toBeVisible();
 
   await page.goto('/processes');
-  const processLatest = await page.waitForResponse(
-    (response) => response.url().includes('/api/processes/maps/latest/') && response.request().method() === 'GET',
-    { timeout: 45000 }
-  );
-  expect(processLatest.status(), 'process latest should not fail').toBe(200);
+  await expect(page).toHaveURL(/\/medsupplier/);
+  await expect(page.getByRole('heading', { name: /ISO Smart MedSupplier/i }).first()).toBeVisible();
 
-  const forbiddenScope = await page.request.get('/api/scope/latest/?organization_id=999999', {
+  const forbiddenAccounts = await page.request.get('/api/medsupplier/accounts/?organization_id=999999', {
     headers: {
       Authorization: `Bearer ${token}`,
     },
   });
-  expect(forbiddenScope.status(), 'scope endpoint should enforce tenant isolation').toBe(403);
+  expect(forbiddenAccounts.status(), 'MedSupplier account endpoint should enforce tenant isolation').toBe(403);
 
-  const forbiddenProcesses = await page.request.get('/api/processes/latest/?organization_id=999999', {
+  const forbiddenQuotes = await page.request.get('/api/medsupplier/quotes/?organization_id=999999', {
     headers: {
       Authorization: `Bearer ${token}`,
     },
   });
-  expect(forbiddenProcesses.status(), 'processes endpoint should enforce tenant isolation').toBe(403);
+  expect(forbiddenQuotes.status(), 'MedSupplier quotes endpoint should enforce tenant isolation').toBe(403);
 });

@@ -6,6 +6,22 @@
     <meta name="description" content="ISO Smart MedSupplier — Torre de control regulada Supplier-Customer para clientes de Medical Devices y empresas transnacionales." />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <title>ISO Smart MedSupplier | Smart3AI</title>
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem('isosmart-theme') || 'system';
+          var fontSize = localStorage.getItem('isosmart_font_size') || 'normal';
+          var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var resolvedTheme = theme === 'system' ? (prefersDark ? 'dark' : 'light') : theme;
+          document.documentElement.classList.toggle('dark', resolvedTheme === 'dark');
+          document.documentElement.setAttribute('data-theme', resolvedTheme);
+          document.documentElement.setAttribute('data-theme-preference', theme);
+          document.documentElement.setAttribute('data-font-size', fontSize);
+        } catch {
+          document.documentElement.setAttribute('data-font-size', 'normal');
+        }
+      })();
+    </script>
     <!-- Fuentes: preconnect para reducir latencia, carga no bloqueante con media=print -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
