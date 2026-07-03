@@ -166,7 +166,7 @@ class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelVie
         self._create_audit_event(instance, 'delete', old_values=old_values)
         instance.delete()
 
-    def _create_audit_event(self, instance, action, old_values=None, new_values=None, reason=''):
+    def _create_audit_event(self, instance, action, old_values=None, new_values=None, reason='', description=None):
         return models.MedSupplierAuditEvent.objects.create(
             organization_id=instance.organization_id,
             account=_record_account(instance),
@@ -176,7 +176,7 @@ class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelVie
             record_id=str(instance.pk),
             object_type=instance._meta.label_lower,
             object_id=str(instance.pk),
-            description=f'{action} {_record_label(instance)}',
+            description=description or f'{action} {_record_label(instance)}',
             reason=reason or '',
             old_values=old_values or {},
             new_values=new_values or {},
@@ -190,7 +190,24 @@ class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelVie
             raise ValidationError({'reason': 'La razón es obligatoria para acciones sensibles/e-signature.'})
         return reason
 
+    def _require_signature_challenge(self):
+        challenge = (
+            self.request.data.get('signature_password')
+            or self.request.data.get('signature_challenge')
+            or ''
+        )
+        challenge = str(challenge).strip()
+        if not challenge:
+            raise ValidationError({
+                'signature_challenge': 'Se requiere reautenticación para completar la firma electrónica.'
+            })
+        if not self.request.user.check_password(challenge):
+            raise ValidationError({
+                'signature_challenge': 'El challenge de firma electrónica no es válido.'
+            })
+
     def _create_esignature(self, instance, meaning, reason):
+        self._require_signature_challenge()
         return models.MedSupplierESignature.objects.create(
             organization_id=instance.organization_id,
             account=_record_account(instance),
@@ -207,6 +224,8 @@ class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelVie
         context = self.get_medsupplier_context()
         assert_can_mutate(context)
         assert_object_allowed(instance, context)
+        if reason:
+            self._require_signature_challenge()
         old_values = _snapshot(instance)
         for field, value in updates.items():
             setattr(instance, field, value)
@@ -219,18 +238,10 @@ class MedSupplierScopedViewSet(OrganizationScopedViewSetMixin, viewsets.ModelVie
             old_values=old_values,
             new_values=_snapshot(instance),
             reason=reason,
+            description=description,
         )
         if reason:
             self._create_esignature(instance, signature_meaning, reason)
-        if description:
-            latest = models.MedSupplierAuditEvent.objects.filter(
-                organization=instance.organization,
-                record_type=instance._meta.model_name,
-                record_id=str(instance.pk),
-            ).first()
-            if latest:
-                latest.description = description
-                latest.save(update_fields=['description'])
         return instance
 
 
@@ -475,6 +486,7 @@ class SupplierQuoteViewSet(MedSupplierScopedViewSet):
         context = self.get_medsupplier_context()
         assert_can_mutate(context)
         assert_object_allowed(quote, context)
+        self._require_signature_challenge()
 
         base_revision = int((quote.metadata or {}).get('revision', 1))
         revision = base_revision + 1

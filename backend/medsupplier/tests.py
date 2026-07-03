@@ -72,6 +72,8 @@ class MedSupplierSerializerGuardrailTests(TestCase):
 
 
 class MedSupplierPermissionTests(TestCase):
+    signature_password = 'StrongPass@123'
+
     def setUp(self):
         self.client = APIClient()
         self.auth_client = APIClient()
@@ -308,7 +310,10 @@ class MedSupplierPermissionTests(TestCase):
     def test_document_approve_changes_status_and_audits(self):
         response = self.auth_client.post(
             f"{reverse('medsupplier-document-detail', args=[self.document.id])}approve/?organization_id={self.org_a.id}",
-            {'reason': 'Document release approved for controlled demo.'},
+            {
+                'reason': 'Document release approved for controlled demo.',
+                'signature_password': self.signature_password,
+            },
             format='json',
         )
         self.assertEqual(response.status_code, 200)
@@ -327,6 +332,90 @@ class MedSupplierPermissionTests(TestCase):
         self.assertEqual(version.approved_by, self.manager.email)
         self.assertIsNotNone(version.approved_at)
 
+    def test_document_approve_requires_signature_challenge(self):
+        response = self.auth_client.post(
+            f"{reverse('medsupplier-document-detail', args=[self.document.id])}approve/?organization_id={self.org_a.id}",
+            {'reason': 'Document release approved for controlled demo.'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('signature_challenge', response.data)
+        self.assertFalse(MedSupplierESignature.objects.filter(object_id=str(self.document.id)).exists())
+
+    def test_document_approve_rejects_invalid_signature_challenge(self):
+        response = self.auth_client.post(
+            f"{reverse('medsupplier-document-detail', args=[self.document.id])}approve/?organization_id={self.org_a.id}",
+            {
+                'reason': 'Document release approved for controlled demo.',
+                'signature_password': 'WrongPass@123',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('signature_challenge', response.data)
+        self.assertFalse(MedSupplierESignature.objects.filter(object_id=str(self.document.id)).exists())
+
+    def test_signature_is_always_bound_to_authenticated_user(self):
+        response = self.auth_client.post(
+            f"{reverse('medsupplier-document-detail', args=[self.document.id])}approve/?organization_id={self.org_a.id}",
+            {
+                'reason': 'Document release approved for controlled demo.',
+                'signature_password': self.signature_password,
+                'user': self.auditor.id,
+                'user_id': self.auditor.id,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        signature = MedSupplierESignature.objects.get(object_id=str(self.document.id), meaning='approval')
+        self.assertEqual(signature.user, self.manager)
+
+    def test_signature_cross_tenant_object_is_blocked(self):
+        foreign_account = SupplierAccount.objects.create(
+            organization=self.org_b,
+            name='Foreign Signature Customer',
+            account_code='MED-B-SIGN',
+            status='active',
+        )
+        foreign_document = SupplierDocument.objects.create(
+            organization=self.org_b,
+            account=foreign_account,
+            document_number='DOC-MED-B-001',
+            title='Foreign COC Template',
+            document_type='COC',
+            status='draft',
+        )
+
+        response = self.auth_client.post(
+            f"{reverse('medsupplier-document-detail', args=[foreign_document.id])}approve/?organization_id={self.org_a.id}",
+            {
+                'reason': 'Attempt cross-tenant signature.',
+                'signature_password': self.signature_password,
+            },
+            format='json',
+        )
+
+        self.assertIn(response.status_code, (403, 404))
+        self.assertFalse(MedSupplierESignature.objects.filter(object_id=str(foreign_document.id)).exists())
+
+    def test_audit_trail_hash_chain_verification_detects_tampering(self):
+        self.auth_client.post(
+            f"{reverse('medsupplier-document-detail', args=[self.document.id])}approve/?organization_id={self.org_a.id}",
+            {
+                'reason': 'Document release approved for controlled demo.',
+                'signature_password': self.signature_password,
+            },
+            format='json',
+        )
+
+        self.assertTrue(MedSupplierAuditEvent.verify_chain(self.org_a.id))
+        event = MedSupplierAuditEvent.objects.filter(organization=self.org_a).first()
+        MedSupplierAuditEvent.objects.filter(pk=event.pk).update(reason='tampered reason')
+        self.assertFalse(MedSupplierAuditEvent.verify_chain(self.org_a.id))
+
     def test_document_obsolete_requires_reason_and_sets_obsolete_date(self):
         missing_reason = self.auth_client.post(
             f"{reverse('medsupplier-document-detail', args=[self.document.id])}obsolete/?organization_id={self.org_a.id}",
@@ -337,7 +426,10 @@ class MedSupplierPermissionTests(TestCase):
 
         response = self.auth_client.post(
             f"{reverse('medsupplier-document-detail', args=[self.document.id])}obsolete/?organization_id={self.org_a.id}",
-            {'reason': 'Controlled document superseded by new revision.'},
+            {
+                'reason': 'Controlled document superseded by new revision.',
+                'signature_password': self.signature_password,
+            },
             format='json',
         )
         self.assertEqual(response.status_code, 200)
@@ -357,6 +449,7 @@ class MedSupplierPermissionTests(TestCase):
             payload = {}
             if action_name in {'approve', 'close'}:
                 payload['reason'] = f'{action_name} approved during workflow test.'
+                payload['signature_password'] = self.signature_password
             response = self.auth_client.post(
                 f"{reverse(route_name, args=[instance.id])}{action_name}/?organization_id={self.org_a.id}",
                 payload,
@@ -420,7 +513,10 @@ class MedSupplierPermissionTests(TestCase):
         self.quote.save(update_fields=['internal_notes', 'valid_until'])
         response = self.auth_client.post(
             f"{reverse('medsupplier-quote-detail', args=[self.quote.id])}revise/?organization_id={self.org_a.id}",
-            {'reason': 'Customer requested corrected item revision.'},
+            {
+                'reason': 'Customer requested corrected item revision.',
+                'signature_password': self.signature_password,
+            },
             format='json',
         )
         self.assertEqual(response.status_code, 201)

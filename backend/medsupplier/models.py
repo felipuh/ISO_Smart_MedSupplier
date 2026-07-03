@@ -775,6 +775,18 @@ class MedSupplierAuditEvent(models.Model):
         serialized = json.dumps(payload, sort_keys=True, default=str)
         return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
 
+    @classmethod
+    def verify_chain(cls, organization_id):
+        previous_hash = ''
+        events = cls.objects.filter(organization_id=organization_id).order_by('id')
+        for event in events:
+            if event.previous_hash != previous_hash:
+                return False
+            if event.event_hash != event.calculate_hash():
+                return False
+            previous_hash = event.event_hash
+        return True
+
     def save(self, *args, **kwargs):
         if not self.object_type:
             self.object_type = self.record_type
@@ -783,7 +795,7 @@ class MedSupplierAuditEvent(models.Model):
         if not self.previous_hash:
             previous = MedSupplierAuditEvent.objects.filter(
                 organization_id=self.organization_id,
-            ).exclude(pk=self.pk).order_by('-created_at', '-id').first()
+            ).exclude(pk=self.pk).order_by('-id').first()
             self.previous_hash = previous.event_hash if previous else ''
         super().save(*args, **kwargs)
         if not self.event_hash:
