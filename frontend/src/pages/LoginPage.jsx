@@ -8,6 +8,8 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useI18n } from '../context/I18nContext';
 
+const LOCAL_DEMO_ACCESS_ENABLED = import.meta.env.VITE_LOCAL_AUTH_BYPASS === '1';
+
 const LoginPage = () => {
   const { t } = useI18n();
   const [email, setEmail] = useState('');
@@ -19,7 +21,8 @@ const LoginPage = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const showLocalDemoAccess = typeof window !== 'undefined'
+  const showLocalDemoAccess = LOCAL_DEMO_ACCESS_ENABLED
+    && typeof window !== 'undefined'
     && (
       ['localhost', '127.0.0.1'].includes(window.location.hostname)
       || window.location.hostname.endsWith('.local')
