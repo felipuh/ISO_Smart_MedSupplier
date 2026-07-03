@@ -871,6 +871,60 @@ class MedSupplierAdminAppsClientTests(TestCase):
         self.assertEqual(result['reason'], 'timeout')
 
     @override_settings(
+        IS_PRODUCTION=True,
+        ADMIN_APPS_INTEGRATION={
+            'BASE_URL': 'http://adminapps.test/api/integration',
+            'API_KEY': 'test-key',
+            'TIMEOUT': 1,
+            'CACHE_TTL': 0,
+            'ALLOW_LOCAL_FALLBACK': True,
+        },
+    )
+    def test_identity_fallbacks_are_disabled_in_production_when_adminapps_unavailable(self):
+        client = AdminAppsClient()
+
+        with patch.object(client, '_make_request', return_value={'error': 'Timeout', 'code': 'timeout'}), \
+                patch.object(client, '_get_organizations_local') as local_orgs, \
+                patch.object(client, '_get_organization_local') as local_org, \
+                patch.object(client, '_get_organization_users_local') as local_users, \
+                patch.object(client, '_get_organization_modules_local') as local_modules:
+            responses = [
+                client.get_organizations(use_cache=False),
+                client.get_organization(self.org.id, use_cache=False),
+                client.get_organization_users(self.org.id, use_cache=False),
+                client.get_organization_modules(self.org.id, use_cache=False),
+            ]
+
+        for response in responses:
+            self.assertEqual(response['fallback'], 'disabled')
+            self.assertEqual(response['source'], 'adminapps')
+
+        local_orgs.assert_not_called()
+        local_org.assert_not_called()
+        local_users.assert_not_called()
+        local_modules.assert_not_called()
+
+    @override_settings(
+        IS_PRODUCTION=False,
+        ADMIN_APPS_INTEGRATION={
+            'BASE_URL': 'http://adminapps.test/api/integration',
+            'API_KEY': 'test-key',
+            'TIMEOUT': 1,
+            'CACHE_TTL': 0,
+            'ALLOW_LOCAL_FALLBACK': False,
+        },
+    )
+    def test_identity_fallbacks_require_explicit_demo_flag(self):
+        client = AdminAppsClient()
+
+        with patch.object(client, '_make_request', return_value={'error': 'Timeout', 'code': 'timeout'}), \
+                patch.object(client, '_get_organizations_local') as local_orgs:
+            result = client.get_organizations(use_cache=False)
+
+        self.assertEqual(result['fallback'], 'disabled')
+        local_orgs.assert_not_called()
+
+    @override_settings(
         IS_PRODUCTION=False,
         ADMIN_APPS_INTEGRATION={
             'BASE_URL': 'http://adminapps.test/api/integration',
