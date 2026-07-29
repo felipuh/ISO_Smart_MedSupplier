@@ -94,6 +94,44 @@ class LoginSerializer(serializers.Serializer):
                 return with_suffix
             suffix += 1
 
+    def _build_local_adminapps_payload(self, user, organization=None):
+        local_profiles = UserProfile.objects.filter(
+            user=user,
+            is_active=True,
+            organization__is_active=True,
+        ).select_related('organization')
+
+        local_orgs = []
+        for local_profile in local_profiles:
+            local_org = local_profile.organization
+            local_orgs.append({
+                'id': local_org.external_id or str(local_org.id),
+                'name': local_org.name,
+                'slug': local_org.slug,
+            })
+
+        selected_org = None
+        if organization is not None:
+            selected_org = organization.external_id or str(organization.id)
+
+        current_org = next(
+            (
+                org_item for org_item in local_orgs
+                if selected_org and org_item.get('id') == selected_org
+            ),
+            local_orgs[0] if local_orgs else {},
+        )
+
+        return {
+            'user': {
+                'id': user.id,
+                'email': user.email,
+            },
+            'organization': current_org,
+            'organizations': local_orgs,
+            'role': None,
+        }
+
     def _sync_profiles_from_adminapps(self, user, admin_apps_data):
         organizations = list(admin_apps_data.get('organizations') or [])
         if not organizations:
@@ -214,6 +252,9 @@ class LoginSerializer(serializers.Serializer):
                     organization_id=external_org_id
                 )
 
+            if not user and candidate and candidate.check_password(password):
+                user = candidate
+
             if not user:
                 if candidate:
                     try:
@@ -234,43 +275,20 @@ class LoginSerializer(serializers.Serializer):
             # Reject local-backend-only logins unless controlled local bypass is explicitly enabled.
             admin_apps_data = getattr(request_obj, 'admin_apps_data', None) if request_obj else None
             if not admin_apps_data:
-                if not allow_local_bypass:
+                has_local_profiles = UserProfile.objects.filter(
+                    user=user,
+                    is_active=True,
+                    organization__is_active=True,
+                ).exists()
+
+                if not allow_local_bypass and not has_local_profiles:
                     raise serializers.ValidationError(
                         'No fue posible validar tu acceso contra AdminApps. Contacta al administrador.',
                         code='authorization'
                     )
 
-                # Local bypass for testing: synthesize AdminApps-like payload from active local profiles.
-                local_profiles = UserProfile.objects.filter(
-                    user=user,
-                    is_active=True,
-                    organization__is_active=True,
-                ).select_related('organization')
-
-                local_orgs = []
-                for local_profile in local_profiles:
-                    local_org = local_profile.organization
-                    local_orgs.append({
-                        'id': local_org.external_id,
-                        'name': local_org.name,
-                        'slug': local_org.slug,
-                    })
-
-                selected_org = organization.external_id if organization else None
-                current_org = next(
-                    (org_item for org_item in local_orgs if selected_org and org_item.get('id') == selected_org),
-                    local_orgs[0] if local_orgs else {},
-                )
-
-                admin_apps_data = {
-                    'user': {
-                        'id': user.id,
-                        'email': user.email,
-                    },
-                    'organization': current_org,
-                    'organizations': local_orgs,
-                    'role': None,
-                }
+                # Local fallback: synthesize AdminApps-like payload from active local profiles.
+                admin_apps_data = self._build_local_adminapps_payload(user, organization)
 
                 if request_obj is not None:
                     request_obj.admin_apps_data = admin_apps_data

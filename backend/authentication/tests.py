@@ -7,6 +7,7 @@ from django.urls import reverse
 from django.utils import timezone
 from datetime import timedelta
 from io import StringIO
+from unittest.mock import patch
 from rest_framework.test import APIClient
 
 from authentication.models import PasswordResetToken, UserProfile
@@ -205,6 +206,46 @@ class LoginLockoutTests(TestCase):
             format='json',
         )
         self.assertEqual(response.status_code, 200)
+
+
+class LocalLoginFallbackTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        user_model = get_user_model()
+        self.user = user_model.objects.create_user(
+            email='local-fallback@isosmart.local',
+            password='StrongPass@123',
+            first_name='Local',
+            last_name='Fallback',
+        )
+        self.organization = Organization.objects.create(
+            name='Fallback Org',
+            slug='fallback-org',
+            email='fallback-org@isosmart.local',
+        )
+        UserProfile.objects.create(
+            user=self.user,
+            organization=self.organization,
+            role='user',
+            is_active=True,
+        )
+        self.login_url = reverse('authentication:login')
+
+    @override_settings(OWNER_ORGANIZATION_ONLY_ACCESS=False, ALLOW_LOCAL_AUTH_BYPASS_FOR_TESTS=False)
+    def test_login_uses_local_profile_when_adminapps_validation_fails(self):
+        with patch('integration.backends.admin_apps_client.validate_credentials', return_value={
+            'valid': False,
+            'error': 'unauthorized',
+        }):
+            response = self.client.post(
+                self.login_url,
+                {'email': self.user.email, 'password': 'StrongPass@123'},
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('access', response.data)
+        self.assertEqual(response.data['user']['email'], self.user.email)
 
 
 class LocalDevPasswordCommandTests(TestCase):

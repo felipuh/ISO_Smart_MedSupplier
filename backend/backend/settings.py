@@ -53,16 +53,15 @@ ALLOWED_HOSTS = _env_list(
     default='localhost,127.0.0.1,192.168.100.100,isosmart.local'
 )
 
-# Keep local reverse-proxy host aliases accepted even if .env ALLOWED_HOSTS is stale.
-if not IS_PRODUCTION:
-    for required_host in (
-        'isosmart.smart3ai.local',
-        'medsupplier.isosmart.local',
-        'medsupplier.smart3ai.local',
-        'smart3ai.local',
-    ):
-        if required_host not in ALLOWED_HOSTS:
-            ALLOWED_HOSTS.append(required_host)
+# Keep the local reverse-proxy aliases accepted even when the env file is stale.
+for required_host in (
+    'isosmart.smart3ai.local',
+    'medsupplier.isosmart.local',
+    'medsupplier.smart3ai.local',
+    'smart3ai.local',
+):
+    if required_host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(required_host)
 
 if IS_PRODUCTION:
     if SECRET_KEY in ('', 'change-this-dev-secret-key-before-deploy'):
@@ -149,9 +148,9 @@ OWNER_ORGANIZATION_SLUG = os.getenv('OWNER_ORGANIZATION_SLUG', 'smart3ai')
 OWNER_ORGANIZATION_NAME = os.getenv('OWNER_ORGANIZATION_NAME', 'Smart3AI')
 OWNER_ORGANIZATION_EXTERNAL_ID = os.getenv('OWNER_ORGANIZATION_EXTERNAL_ID', '').strip()
 OWNER_ORGANIZATION_BILLING_EXEMPT = _env_bool('OWNER_ORGANIZATION_BILLING_EXEMPT', default=True)
-ALLOW_LOCAL_AUTH_BYPASS_FOR_TESTS = (
-    IS_DEVELOPMENT
-    and _env_bool('ALLOW_LOCAL_AUTH_BYPASS_FOR_TESTS', default=False)
+ALLOW_LOCAL_AUTH_BYPASS_FOR_TESTS = _env_bool(
+    'ALLOW_LOCAL_AUTH_BYPASS_FOR_TESTS',
+    default=IS_DEVELOPMENT,
 )
 
 # Configuración de REST Framework
