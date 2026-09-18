@@ -8,6 +8,7 @@ import { useAuth } from '../../../context/AuthContext';
 import { useI18n } from '../../../context/I18nContext';
 import medsupplierService from '../../../services/medsupplierService';
 import { getMedSupplierSection, medsupplierSections } from '../medsupplierSections';
+import { S3Button, S3ConfirmationDialog, S3LoadingState, S3StatusBadge } from '@smart3ai/design-system';
 
 const normalizeValueKey = (value) => String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
 
@@ -24,6 +25,14 @@ const formatCell = (value, { locale, t, translateValue }) => {
 };
 
 const statusLabel = (value, t) => (value ? t('medsupplier.integration.statusReady') : t('medsupplier.integration.statusAttention'));
+const statusTone = (value) => {
+  const normalized = normalizeValueKey(value);
+  if (['active', 'approved', 'confirmed', 'completed', 'closed', 'delivered', 'exported', 'prepared'].includes(normalized)) return 'success';
+  if (['draft', 'planned', 'open', 'under_review', 'pending', 'partial', 'mitigating'].includes(normalized)) return 'info';
+  if (['delayed', 'obsolete', 'expired'].includes(normalized)) return 'warning';
+  if (['cancelled', 'canceled', 'rejected', 'failed'].includes(normalized)) return 'danger';
+  return 'neutral';
+};
 
 const formatInputValue = (field, value) => {
   if (value === null || value === undefined) return '';
@@ -195,12 +204,12 @@ const RecordForm = ({ fields, form, lookupOptions, onChange, onSubmit, onCancel,
     </div>
 
     <div className="flex justify-end gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">
-      <button type="button" onClick={onCancel} className="btn-secondary" disabled={saving}>
+      <S3Button type="button" onClick={onCancel} variant="secondary" disabled={saving}>
         {t('medsupplier.workspace.cancel')}
-      </button>
-      <button type="submit" className="btn-primary" disabled={saving}>
+      </S3Button>
+      <S3Button type="submit" disabled={saving} loading={saving}>
         {saving ? t('medsupplier.workspace.saving') : submitLabel}
-      </button>
+      </S3Button>
     </div>
   </form>
 );
@@ -216,7 +225,7 @@ const filterPermittedFields = (fields, permissions) => (
 
 const ProductModePanel = ({ status, loading, onRefresh, t }) => (
   <div className="space-y-4">
-    <section className="rounded-lg border border-blue-200 bg-blue-50 p-5 dark:border-blue-900 dark:bg-blue-950/30">
+    <section className="rounded-lg border border-blue-200 bg-blue-50 p-5 shadow-sm dark:border-blue-900 dark:bg-blue-950/30">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="mb-2 flex items-center gap-2 text-blue-800 dark:text-blue-200">
@@ -239,7 +248,7 @@ const ProductModePanel = ({ status, loading, onRefresh, t }) => (
     </section>
 
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="enterprise-panel p-5">
         <div className="mb-3 flex items-center gap-2 text-emerald-700 dark:text-emerald-200">
           <KeyRound className="h-5 w-5" />
           <h3 className="font-semibold">{t('medsupplier.integration.identityTitle')}</h3>
@@ -251,7 +260,7 @@ const ProductModePanel = ({ status, loading, onRefresh, t }) => (
           {t('medsupplier.integration.identityDescription')}
         </p>
       </div>
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="enterprise-panel p-5">
         <div className="mb-3 flex items-center gap-2 text-blue-700 dark:text-blue-200">
           <Building2 className="h-5 w-5" />
           <h3 className="font-semibold">{t('medsupplier.integration.enablementTitle')}</h3>
@@ -263,7 +272,7 @@ const ProductModePanel = ({ status, loading, onRefresh, t }) => (
           {t('medsupplier.integration.commercialCode')}: <strong>{status?.module_code || 'MEDSUPPLIER'}</strong>
         </p>
       </div>
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="enterprise-panel p-5">
         <div className="mb-3 flex items-center gap-2 text-amber-700 dark:text-amber-200">
           <LockKeyhole className="h-5 w-5" />
           <h3 className="font-semibold">{t('medsupplier.integration.separationTitle')}</h3>
@@ -282,8 +291,8 @@ const ProductModePanel = ({ status, loading, onRefresh, t }) => (
 const PrivateCockpitPanel = ({ data, loading, onRefresh, t, formatValue }) => {
   if (loading) {
     return (
-      <div className="flex justify-center p-8">
-        <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-blue-500" />
+      <div className="enterprise-panel flex min-h-48 items-center justify-center p-8">
+        <S3LoadingState variant="section" label={t('common.messages.loading')} />
       </div>
     );
   }
@@ -294,13 +303,13 @@ const PrivateCockpitPanel = ({ data, loading, onRefresh, t, formatValue }) => {
 
   return (
     <div className="space-y-4">
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <section className="enterprise-panel p-5">
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{t('medsupplier.cockpit.title')}</h2>
             <p className="text-sm text-slate-500 dark:text-slate-400">{t('medsupplier.cockpit.subtitle')}</p>
           </div>
-          <button type="button" onClick={onRefresh} className="btn-secondary">{t('medsupplier.cockpit.refresh')}</button>
+          <S3Button type="button" onClick={onRefresh} variant="secondary" icon={RefreshCw}>{t('medsupplier.cockpit.refresh')}</S3Button>
         </div>
       </section>
 
@@ -313,35 +322,35 @@ const PrivateCockpitPanel = ({ data, loading, onRefresh, t, formatValue }) => {
           [t('medsupplier.cockpit.commissions'), finance.commission_total ?? '0.00'],
           [t('medsupplier.cockpit.expiredQuotes'), aging.expired_quotes ?? 0],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div key={label} className="enterprise-panel p-4">
             <p className="text-sm text-slate-500 dark:text-slate-400">{label}</p>
             <p className="mt-1 text-2xl font-semibold text-slate-950 dark:text-white">{value}</p>
           </div>
         ))}
       </div>
 
-      <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+      <section className="enterprise-panel overflow-hidden">
+        <div className="enterprise-panel-header">
           <h3 className="font-semibold text-slate-950 dark:text-white">{t('medsupplier.cockpit.forecastTitle')}</h3>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-slate-100 dark:bg-slate-800/60">
+          <table className="enterprise-table">
+            <thead>
               <tr>
                 {['Quote', t('medsupplier.columns.status'), t('medsupplier.columns.total_amount'), t('medsupplier.fields.margin'), t('medsupplier.fields.forecast_probability'), t('medsupplier.fields.valid_until')].map((label) => (
-                  <th key={label} className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">{label}</th>
+                  <th key={label}>{label}</th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+            <tbody>
               {(data?.forecast || []).map((item) => (
                 <tr key={item.id}>
-                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{item.quote_number}</td>
-                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{formatValue(item.status)}</td>
-                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{item.total_amount}</td>
-                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{item.margin}</td>
-                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{item.forecast_probability}%</td>
-                  <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">{formatValue(item.valid_until)}</td>
+                  <td>{item.quote_number}</td>
+                  <td><S3StatusBadge tone={statusTone(item.status)}>{formatValue(item.status)}</S3StatusBadge></td>
+                  <td>{item.total_amount}</td>
+                  <td>{item.margin}</td>
+                  <td>{item.forecast_probability}%</td>
+                  <td>{formatValue(item.valid_until)}</td>
                 </tr>
               ))}
               {(!data?.forecast || data.forecast.length === 0) && <CrudEmptyState colSpan={6} message={t('medsupplier.cockpit.emptyForecast')} />}
@@ -369,6 +378,7 @@ const MedSupplierWorkspace = () => {
   const [cockpitLoading, setCockpitLoading] = useState(false);
   const [error, setError] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [deleteCandidate, setDeleteCandidate] = useState(null);
   const [editingRecord, setEditingRecord] = useState(null);
   const permittedFields = useMemo(() => filterPermittedFields(section.formFields || [], permissions), [section.formFields, permissions]);
   const [form, setForm] = useState(() => buildInitialForm(permittedFields));
@@ -568,16 +578,24 @@ const MedSupplierWorkspace = () => {
     }
   };
 
-  const handleDelete = async (record) => {
+  const handleDelete = (record) => {
     if (!organizationId || !section.resource) return;
-    const label = record.name || record.account_code || record.id;
-    const confirmed = window.confirm(t('medsupplier.workspace.deleteConfirm', { label }));
-    if (!confirmed) return;
+    setDeleteCandidate(record);
+  };
+
+  const cancelDelete = () => {
+    if (saving) return;
+    setDeleteCandidate(null);
+  };
+
+  const confirmDelete = async () => {
+    if (!organizationId || !section.resource || !deleteCandidate) return;
 
     try {
       setSaving(true);
       setError('');
-      await medsupplierService.remove(section.resource, organizationId, record.id);
+      await medsupplierService.remove(section.resource, organizationId, deleteCandidate.id);
+      setDeleteCandidate(null);
       await loadData();
     } catch (err) {
       setError(extractApiError(err, t('medsupplier.workspace.deleteError', { section: sectionLabel })));
@@ -611,26 +629,25 @@ const MedSupplierWorkspace = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
           <div className="mb-2 flex items-center gap-2 text-sm font-medium text-blue-700 dark:text-blue-200">
             <Icon className="h-4 w-4" />
             {t('medsupplier.productName')}
           </div>
-          <h1 className="text-3xl font-bold text-slate-950 dark:text-white">{sectionLabel}</h1>
+          <h1 className="text-2xl font-semibold tracking-normal text-slate-950 dark:text-white sm:text-3xl">{sectionLabel}</h1>
           <p className="mt-1 max-w-3xl text-slate-600 dark:text-slate-300">{sectionDescription}</p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end">
           {canMutate ? (
-            <button
+            <S3Button
               type="button"
               onClick={openCreateForm}
               disabled={!organizationId}
-              className="btn-primary inline-flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
+              icon={Plus}
             >
-              <Plus className="h-4 w-4" />
               {t('medsupplier.workspace.newRecord')}
-            </button>
+            </S3Button>
           ) : null}
           <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
@@ -660,53 +677,55 @@ const MedSupplierWorkspace = () => {
           formatValue={formatValue}
         />
       ) : (
-        <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+        <section className="enterprise-panel overflow-hidden">
+          <div className="enterprise-panel-header flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{t('medsupplier.workspace.records')}</h2>
               <p className="text-sm text-slate-500 dark:text-slate-400">{t('medsupplier.workspace.recordsInScope', { count })}</p>
             </div>
-            <button
+            <S3Button
               type="button"
               onClick={loadData}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              variant="secondary"
+              icon={RefreshCw}
             >
-              <RefreshCw className="h-4 w-4" />
               {t('medsupplier.workspace.refresh')}
-            </button>
+            </S3Button>
           </div>
 
           {loading ? (
-            <div className="flex justify-center p-8">
-              <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-blue-500" />
+              <div className="flex min-h-48 items-center justify-center p-8">
+                <S3LoadingState variant="section" label={t('common.messages.loading')} />
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-slate-100 dark:bg-slate-800/60">
+              <table className="enterprise-table">
+                <thead>
                   <tr>
                     {section.columns.map(([field, label]) => (
-                      <th key={label} className="px-5 py-3 text-left text-xs font-medium uppercase text-slate-600 dark:text-slate-300">
+                      <th key={label}>
                         {translateColumnLabel(field, label)}
                       </th>
                     ))}
                     {canMutate ? (
-                      <th className="px-5 py-3 text-right text-xs font-medium uppercase text-slate-600 dark:text-slate-300">
+                      <th className="text-right">
                         {t('medsupplier.workspace.actions')}
                       </th>
                     ) : null}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                <tbody>
                   {items.map((item) => (
-                    <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/60">
+                    <tr key={item.id}>
                       {section.columns.map(([field]) => (
-                        <td key={field} className="px-5 py-4 text-sm text-slate-700 dark:text-slate-200">
-                          {formatValue(item[field])}
+                        <td key={field}>
+                          {field === 'status' ? (
+                            <S3StatusBadge tone={statusTone(item[field])}>{formatValue(item[field])}</S3StatusBadge>
+                          ) : formatValue(item[field])}
                         </td>
                       ))}
                       {canMutate ? (
-                        <td className="px-5 py-4">
+                        <td>
                           <div className="flex justify-end gap-2">
                             {(section.workflowActions || []).map((workflowAction) => {
                               const disabledReason = getWorkflowDisabledReason(workflowAction, item, t);
@@ -767,7 +786,7 @@ const MedSupplierWorkspace = () => {
             <Link
               key={item.key}
               to={`/medsupplier/${item.key}`}
-              className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-blue-800 dark:hover:bg-blue-950/30"
+              className="enterprise-panel p-4 text-sm transition hover:border-blue-300 hover:bg-blue-50 dark:hover:border-blue-800 dark:hover:bg-blue-950/30"
             >
               <RelatedIcon className="mb-2 h-5 w-5 text-blue-700 dark:text-blue-200" />
               <p className="font-semibold text-slate-950 dark:text-white">{translateSectionLabel(item)}</p>
@@ -797,6 +816,19 @@ const MedSupplierWorkspace = () => {
           translateOptionLabel={translateOptionLabel}
         />
       </Modal>
+
+      <S3ConfirmationDialog
+        open={Boolean(deleteCandidate)}
+        title={t('common.buttons.delete')}
+        description={deleteCandidate ? t('medsupplier.workspace.deleteConfirm', { label: deleteCandidate.name || deleteCandidate.account_code || deleteCandidate.id }) : ''}
+        confirmLabel={t('common.buttons.delete')}
+        cancelLabel={t('common.buttons.cancel')}
+        tone="danger"
+        loading={saving}
+        disabled={!organizationId || !section.resource}
+        onConfirm={confirmDelete}
+        onCancel={cancelDelete}
+      />
     </div>
   );
 };

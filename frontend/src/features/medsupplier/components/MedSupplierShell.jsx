@@ -174,6 +174,12 @@ const MedSupplierShell = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-white">
+      <a
+        href="#medsupplier-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70] focus:rounded-lg focus:bg-blue-800 focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white"
+      >
+        {language === 'en' ? 'Skip to content' : 'Saltar al contenido'}
+      </a>
       {sidebarOpen && (
         <button
           type="button"
@@ -184,20 +190,23 @@ const MedSupplierShell = () => {
         />
       )}
 
-      <aside className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-slate-200 bg-white transition-transform dark:border-slate-800 dark:bg-slate-900 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        <div className="border-b border-slate-200 p-5 dark:border-slate-800">
+      <aside className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-slate-200 bg-white/95 shadow-sm backdrop-blur transition-transform dark:border-slate-800 dark:bg-slate-900/95 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+        <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
           <Link to="/medsupplier" className="flex items-center gap-3" onClick={() => setSidebarOpen(false)}>
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-700 text-white shadow-sm">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-800 text-white shadow-sm">
               <Activity className="h-5 w-5" />
             </span>
             <span className="min-w-0">
-              <span className="block truncate text-lg font-bold tracking-normal">{t('header.appTitle')}</span>
+              <span className="block truncate text-base font-semibold tracking-normal">{t('header.appTitle')}</span>
               <span className="mt-1 block truncate text-xs text-slate-500 dark:text-slate-400">{tenantName}</span>
             </span>
           </Link>
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
+            {t('medsupplier.productName')}
+          </div>
         </div>
 
-        <nav className="flex-1 space-y-1 overflow-y-auto p-3">
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
           {visibleSections.map((item) => {
             const Icon = item.icon;
             const to = item.key === 'accounts' ? '/medsupplier/accounts' : `/medsupplier/${item.key}`;
@@ -208,12 +217,12 @@ const MedSupplierShell = () => {
                 onClick={() => setSidebarOpen(false)}
                 className={({ isActive }) => `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
                   isActive
-                    ? 'bg-blue-600 text-white shadow-sm'
+                    ? 'bg-blue-50 text-blue-800 ring-1 ring-blue-100 dark:bg-blue-950/40 dark:text-blue-100 dark:ring-blue-900/50'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
                 }`}
               >
-                <Icon className="h-4 w-4" />
-                {getSectionLabel(item.key, item.label)}
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className="truncate">{getSectionLabel(item.key, item.label)}</span>
               </NavLink>
             );
           })}
@@ -227,20 +236,20 @@ const MedSupplierShell = () => {
       </aside>
 
       <div className="lg:pl-72">
-        <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-3 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95 sm:px-6">
+        <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-3 py-3 shadow-sm backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/90 sm:px-6">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
               <button
                 type="button"
                 onClick={() => setSidebarOpen((value) => !value)}
-                className="rounded-lg border border-slate-300 p-2 text-slate-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 lg:hidden"
+                className="rounded-lg border border-slate-300 bg-white p-2 text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 lg:hidden"
                 aria-label={sidebarOpen ? t('header.navigation.close') : t('header.navigation.open')}
                 aria-expanded={sidebarOpen}
               >
                 {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
               </button>
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-blue-700 dark:text-blue-200">{t('header.productStatus')}</p>
+                <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{t('header.productStatus')}</p>
                 <p className="hidden truncate text-xs text-slate-500 dark:text-slate-400 sm:block">{t('header.productGovernance')}</p>
               </div>
             </div>
@@ -249,14 +258,14 @@ const MedSupplierShell = () => {
               <button
                 type="button"
                 onClick={toggleTheme}
-                className="rounded-lg border border-slate-300 p-2 text-slate-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                className="rounded-lg border border-slate-300 bg-white p-2 text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                 aria-label={switchThemeLabel}
                 title={switchThemeLabel}
               >
                 {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </button>
 
-              <div className="hidden items-center gap-1 rounded-lg border border-slate-300 px-1 py-1 dark:border-slate-700 sm:flex" role="group" aria-label={t('header.accessibility.fontSizeLabel')}>
+              <div className="hidden items-center gap-1 rounded-lg border border-slate-300 bg-white px-1 py-1 shadow-sm dark:border-slate-700 dark:bg-slate-900 sm:flex" role="group" aria-label={t('header.accessibility.fontSizeLabel')}>
                 <button
                   type="button"
                   onClick={decreaseFontSize}
@@ -288,7 +297,7 @@ const MedSupplierShell = () => {
                 </button>
               </div>
 
-              <label className="hidden items-center gap-2 rounded-lg border border-slate-300 px-2 py-1.5 text-xs font-medium text-slate-600 dark:border-slate-700 dark:text-slate-200 md:flex">
+              <label className="hidden items-center gap-2 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 md:flex">
                 <Languages className="h-4 w-4" aria-hidden="true" />
                 <span className="sr-only">{t('header.languageLabel')}</span>
                 <select
@@ -310,7 +319,7 @@ const MedSupplierShell = () => {
                     setNotificationsOpen((value) => !value);
                     setSettingsOpen(false);
                   }}
-                  className="relative rounded-lg border border-slate-300 p-2 text-slate-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  className="relative rounded-lg border border-slate-300 bg-white p-2 text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                   aria-label={notificationsOpen ? t('header.notificationsPanel.close') : t('header.notificationsPanel.open')}
                   aria-haspopup="menu"
                   aria-expanded={notificationsOpen}
@@ -367,7 +376,7 @@ const MedSupplierShell = () => {
                     setSettingsOpen((value) => !value);
                     setNotificationsOpen(false);
                   }}
-                  className="rounded-lg border border-slate-300 p-2 text-slate-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  className="rounded-lg border border-slate-300 bg-white p-2 text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                   aria-label={settingsOpen ? t('header.settingsMenu.close') : t('header.settingsMenu.open')}
                   aria-haspopup="menu"
                   aria-expanded={settingsOpen}
@@ -450,8 +459,10 @@ const MedSupplierShell = () => {
           </div>
         </header>
 
-        <main className="p-6">
-          <Outlet />
+        <main id="medsupplier-content" className="px-4 py-5 sm:px-6 lg:px-8 lg:py-8" tabIndex={-1}>
+          <div className="mx-auto w-full max-w-[1480px]">
+            <Outlet />
+          </div>
         </main>
         <VirtualAssistantPanel />
       </div>
