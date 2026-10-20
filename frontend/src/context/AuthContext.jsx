@@ -40,7 +40,6 @@ const clearOnboardingSessionFlags = () => {
 };
 
 const AuthContext = createContext(null);
-const localAuthBypassEnabled = import.meta.env.VITE_LOCAL_AUTH_BYPASS === '1';
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -121,18 +120,28 @@ export const AuthProvider = ({ children }) => {
   };
 
   // Login
-  const login = async (email, password, organizationId = null) => {
+  const login = async (email, password, organizationId = null, secondFactor = null) => {
     try {
       const normalizedEmail = String(email || '').trim().toLowerCase();
-      const payload = { email: normalizedEmail, password };
+      const payload = secondFactor || { email: normalizedEmail, password };
       if (organizationId) {
         payload.organization_id = organizationId;
       }
 
-      const response = await api.post('/auth/login/', payload, {
-        headers: localAuthBypassEnabled ? { 'X-ISO-LOCAL-AUTH-BYPASS': '1' } : undefined,
-      });
+      clearAuth();
+      const response = await api.post('/auth/login/', payload);
+      if (response.data.requires_2fa === true) {
+        clearAuth();
+        return { success: false, requires_2fa: true, challenge_token: response.data.challenge_token };
+      }
+      if (response.data.requires_2fa !== false || !response.data.user || !response.data.profile) {
+        throw new Error('Respuesta de autenticación incompleta.');
+      }
       const { access, refresh, user: userData, profile: profileData, organizations: orgs } = response.data;
+
+      if (typeof access !== 'string' || !access || typeof refresh !== 'string' || !refresh) {
+        throw new Error('Respuesta de sesión incompleta.');
+      }
 
       // Guardar tokens
       localStorage.setItem('access_token', access);
@@ -156,6 +165,7 @@ export const AuthProvider = ({ children }) => {
         securityAlert: response.data.security_alert || null,
       };
     } catch (error) {
+      clearAuth();
       const statusCode = error?.response?.status;
       if (statusCode && (statusCode === 400 || statusCode === 401)) {
         console.warn('Login rechazado por credenciales o autorización.');
@@ -189,8 +199,8 @@ export const AuthProvider = ({ children }) => {
       if (refresh) {
         await api.post('/auth/logout/', { refresh });
       }
-    } catch (error) {
-      console.error('Error en logout:', error);
+    } catch {
+      console.error('No fue posible confirmar la revocación central.');
     } finally {
       clearAuth();
     }
@@ -227,18 +237,20 @@ export const AuthProvider = ({ children }) => {
       const response = await api.post('/auth/refresh/', { refresh });
       const { access, refresh: newRefresh } = response.data;
 
-      localStorage.setItem('access_token', access);
-      if (newRefresh) {
-        localStorage.setItem('refresh_token', newRefresh);
+      if (typeof access !== 'string' || !access || typeof newRefresh !== 'string' || !newRefresh) {
+        throw new Error('Respuesta de rotación incompleta.');
       }
+      localStorage.setItem('access_token', access);
+      localStorage.setItem('refresh_token', newRefresh);
       api.defaults.headers.common['Authorization'] = `Bearer ${access}`;
 
       if (reloadUser) {
         await loadCurrentUser();
       }
       return true;
-    } catch (error) {
-      console.error('Error refrescando token:', error);
+    } catch {
+      console.error('La sesión requiere autenticación central nueva.');
+      clearAuth();
       return false;
     }
   };

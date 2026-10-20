@@ -6,7 +6,7 @@ from rest_framework import status, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework_simplejwt.tokens import RefreshToken
+from integration.local_tokens import LocalRefreshToken as RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 from django.contrib.auth.hashers import check_password
 from django.utils import timezone
@@ -22,6 +22,7 @@ from .models import PasswordResetToken, User, UserProfile, RefreshTokenBlacklist
 from core.models import AuditLog, Organization
 from integration.client import admin_apps_client
 from integration.backends import ROLE_MAP
+from integration.central_auth import bind_session, validate_session, AuthorityUnavailable, session_pair
 from .serializers import (
     ChangePasswordSerializer,
     LoginSerializer,
@@ -115,7 +116,18 @@ def _password_reset_frontend_url(selector, raw_token):
     return f"{base_url}/reset-password?selector={selector}&token={raw_token}"
 
 
-class LoginView(APIView):
+class CentralSessionView(APIView):
+    """Sanitize all authority/session failures without granting a response token."""
+    def handle_exception(self, exc):
+        from rest_framework.exceptions import APIException
+        if isinstance(exc, APIException):
+            response = super().handle_exception(exc)
+        else:
+            response = Response({'detail': AuthorityUnavailable.default_detail}, status=503)
+        return response
+
+
+class LoginView(CentralSessionView):
     """
     Vista de Login
     POST /api/auth/login/
@@ -123,26 +135,21 @@ class LoginView(APIView):
     Retorna tokens JWT y datos del usuario
     """
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def post(self, request):
         serializer = LoginSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         
+        if 'challenge' in serializer.validated_data:
+            response = Response(serializer.validated_data['challenge'], status=200)
+            return clear_auth_cookies(response) if 'clear_auth_cookies' in globals() else response
+
         user = serializer.validated_data['user']
         profile = serializer.validated_data['profile']
         
         # Generar tokens
-        refresh = RefreshToken.for_user(user)
-        
-        # Agregar claims personalizados al token
-        refresh['organization_id'] = profile.organization_id
-        refresh['role'] = profile.role
-        refresh['profile_id'] = profile.id
-        
-        access = refresh.access_token
-        access['organization_id'] = profile.organization_id
-        access['role'] = profile.role
-        access['profile_id'] = profile.id
+        refresh, access = session_pair(user, profile, serializer.validated_data['central_proof'])
         
         # Actualizar último login
         user.last_login = timezone.now()
@@ -165,6 +172,7 @@ class LoginView(APIView):
         ]
         
         response_data = {
+            'requires_2fa': False,
             'access': str(access),
             'refresh': str(refresh),
             'user': UserSerializer(user).data,
@@ -177,83 +185,31 @@ class LoginView(APIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
-class LogoutView(APIView):
-    """
-    Vista de Logout
-    POST /api/auth/logout/
-    
-    Invalida el refresh token
-    """
+class LogoutView(CentralSessionView):
     permission_classes = [IsAuthenticated]
-    
+
     def post(self, request):
-        serializer = LogoutSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        
-        try:
-            refresh_token_str = serializer.validated_data['refresh']
-            RefreshToken(refresh_token_str)
-
-            token_hash = RefreshTokenBlacklist.hash_token(refresh_token_str)
-            RefreshTokenBlacklist.objects.get_or_create(
-                token_hash=token_hash,
-                defaults={
-                    'token': refresh_token_str,
-                    'user': request.user,
-                }
-            )
-            
-        except TokenError:
-            pass  # Token ya expirado o inválido, ignorar
-        
-        return Response(
-            {'detail': 'Sesión cerrada exitosamente.'},
-            status=status.HTTP_200_OK
-        )
+        from integration.central_auth import logout_session
+        logout_session(request.auth)
+        return Response({'detail': 'Sesión cerrada.'})
 
 
-class RefreshTokenView(APIView):
-    """
-    Vista para refrescar tokens
-    POST /api/auth/refresh/
-    """
+class RefreshTokenView(CentralSessionView):
     permission_classes = [AllowAny]
-    
+    authentication_classes = []
+
     def post(self, request):
         serializer = RefreshTokenSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
+        raw = serializer.validated_data['refresh']
+        from integration.central_auth import rotate_session
         try:
-            refresh = RefreshToken(serializer.validated_data['refresh'])
-            
-            # Verificar que no esté en lista negra
-            refresh_token_str = str(refresh)
-            if RefreshTokenBlacklist.objects.filter(token_hash=RefreshTokenBlacklist.hash_token(refresh_token_str)).exists():
-                return Response(
-                    {'detail': 'Token inválido o expirado.'},
-                    status=status.HTTP_401_UNAUTHORIZED
-                )
-            
-            # Generar nuevo access token
-            access = refresh.access_token
-            
-            response_data = {
-                'access': str(access),
-            }
-            
-            # Rotar refresh token si está configurado
-            if settings.SIMPLE_JWT.get('ROTATE_REFRESH_TOKENS', False):
-                refresh.set_jti()
-                refresh.set_exp()
-                response_data['refresh'] = str(refresh)
-            
-            return Response(response_data, status=status.HTTP_200_OK)
-            
-        except TokenError as e:
-            return Response(
-                {'detail': 'Token inválido o expirado.'},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
+            if not raw:
+                raise TokenError('Missing refresh')
+            refresh, access = rotate_session(RefreshToken(raw))
+            return Response({'access': str(access), 'refresh': str(refresh)})
+        except TokenError:
+            return Response({'detail': 'Token inválido o expirado.'}, status=401)
 
 
 class MeView(APIView):
@@ -306,7 +262,7 @@ class MeView(APIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
-class SwitchOrganizationView(APIView):
+class SwitchOrganizationView(CentralSessionView):
     """
     Vista para cambiar de organización activa
     POST /api/auth/switch-organization/
@@ -332,15 +288,7 @@ class SwitchOrganizationView(APIView):
         ).select_related('organization').first()
         
         # Generar nuevos tokens
-        refresh = RefreshToken.for_user(user)
-        refresh['organization_id'] = profile.organization_id
-        refresh['role'] = profile.role
-        refresh['profile_id'] = profile.id
-        
-        access = refresh.access_token
-        access['organization_id'] = profile.organization_id
-        access['role'] = profile.role
-        access['profile_id'] = profile.id
+        refresh, access = session_pair(user, profile, request.auth.get('central_proof'))
         
         # Obtener todas las organizaciones
         all_profiles = UserProfile.objects.filter(

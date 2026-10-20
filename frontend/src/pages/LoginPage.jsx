@@ -8,53 +8,52 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useI18n } from '../context/I18nContext';
 
-const LOCAL_DEMO_ACCESS_ENABLED = import.meta.env.VITE_LOCAL_AUTH_BYPASS === '1';
-
 const LoginPage = () => {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
+  const factorLabels = {
+    'es-LATAM': ['Código TOTP o de respaldo', 'Volver al inicio de sesión'],
+    en: ['TOTP or backup code', 'Return to sign in'],
+    pt: ['Código TOTP ou de recuperação', 'Voltar ao login'],
+  }[language] || ['Código TOTP o de respaldo', 'Volver al inicio de sesión'];
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [challenge, setChallenge] = useState(null);
+  const [otpCode, setOtpCode] = useState('');
 
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const showLocalDemoAccess = LOCAL_DEMO_ACCESS_ENABLED
-    && typeof window !== 'undefined'
-    && (
-      ['localhost', '127.0.0.1'].includes(window.location.hostname)
-      || window.location.hostname.endsWith('.local')
-    );
-
-  const fillLocalDemoCredentials = () => {
-    setEmail('medsupplier.e2e@smart3ai.local');
-    setPassword('MedSupplierDemo@123');
-    setError('');
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
     const normalizedEmail = email.trim().toLowerCase();
-    const normalizedPassword = password.trim();
+    const normalizedPassword = password;
     if (!normalizedEmail) {
       setError(`${t('common.forms.email')}: ${t('common.messages.required')}`);
       setLoading(false);
       return;
     }
 
-    if (!normalizedPassword) {
+    if (!challenge && !normalizedPassword) {
       setError(`${t('common.forms.password')}: ${t('common.messages.required')}`);
       setLoading(false);
       return;
     }
 
     try {
-      const result = await login(normalizedEmail, normalizedPassword);
+      const result = await login(normalizedEmail, normalizedPassword, null,
+        challenge ? { challenge_token: challenge, otp_code: otpCode } : null);
+      if (result.requires_2fa) {
+        setChallenge(result.challenge_token);
+        setPassword('');
+        setOtpCode('');
+        return;
+      }
 
       if (result.success) {
         if (result.mustChangePassword) {
@@ -124,6 +123,7 @@ const LoginPage = () => {
                 </div>
                 <input
                   id="email"
+                  disabled={Boolean(challenge)}
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -147,6 +147,7 @@ const LoginPage = () => {
                 </div>
                 <input
                   id="password"
+                  disabled={Boolean(challenge)}
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -174,6 +175,19 @@ const LoginPage = () => {
                 </button>
               </div>
             </div>
+
+            {challenge && (
+              <div>
+                <label htmlFor="otp-code" className="block text-sm font-medium text-slate-300 mb-2">
+                  {factorLabels[0]}
+                </label>
+                <input id="otp-code" value={otpCode} onChange={(e) => setOtpCode(e.target.value)}
+                  autoComplete="one-time-code" required autoFocus
+                  className="w-full px-4 py-3 bg-slate-700/50 border border-slate-600/50 rounded-lg text-white" />
+                <button type="button" onClick={() => { setChallenge(null); setOtpCode(''); }}
+                  className="text-cyan-400 mt-2">{factorLabels[1]}</button>
+              </div>
+            )}
 
             {/* Remember & Forgot */}
             <div className="flex items-center justify-between text-sm">
@@ -213,15 +227,6 @@ const LoginPage = () => {
               )}
             </button>
 
-            {showLocalDemoAccess && (
-              <button
-                type="button"
-                onClick={fillLocalDemoCredentials}
-                className="w-full py-2.5 px-4 border border-slate-600/70 hover:border-cyan-500/70 text-slate-200 hover:text-white font-medium rounded-lg transition-colors"
-              >
-                Usar credenciales demo locales
-              </button>
-            )}
           </form>
 
           {/* Footer */}

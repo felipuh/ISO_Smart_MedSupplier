@@ -5,8 +5,8 @@ import api from './api';
 
 const authService = {
   // Login
-  login: async (email, password, organizationId = null) => {
-    const payload = { email, password };
+  login: async (email, password, organizationId = null, secondFactor = null) => {
+    const payload = secondFactor || { email, password };
     if (organizationId) {
       payload.organization_id = organizationId;
     }
@@ -20,8 +20,8 @@ const authService = {
     if (refresh) {
       try {
         await api.post('/auth/logout/', { refresh });
-      } catch (error) {
-        console.error('Error en logout:', error);
+      } catch {
+        console.error('No fue posible confirmar la revocación central.');
       }
     }
     localStorage.removeItem('access_token');

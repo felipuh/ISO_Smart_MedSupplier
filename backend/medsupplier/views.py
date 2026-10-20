@@ -15,6 +15,7 @@ from rest_framework.response import Response
 
 from authentication.models import UserProfile
 from core.organization_scoping import OrganizationScopedViewSetMixin
+from integration.authorization import authorize_resources
 from integration.client import admin_apps_client
 
 from . import models, serializers
@@ -908,17 +909,13 @@ class EvidencePackageViewSet(MedSupplierScopedViewSet):
         })
 
 
-class EvidencePackageEntryViewSet(viewsets.ModelViewSet):
+class EvidencePackageEntryViewSet(OrganizationScopedViewSetMixin, viewsets.ModelViewSet):
+    organization_lookup_field = 'package__organization_id'
+    organization_write_field = None
     permission_classes = [permissions.IsAuthenticated, MedSupplierCanEdit]
     queryset = models.EvidencePackageEntry.objects.select_related('package', 'package__account')
     serializer_class = serializers.EvidencePackageEntrySerializer
     filterset_fields = ['package', 'object_type', 'object_id']
-
-    def get_organization_id(self):
-        value = self.request.query_params.get('organization_id') or getattr(self.request, 'organization_id', None)
-        if not value:
-            raise ValidationError({'organization_id': 'organization_id requerido'})
-        return int(value)
 
     def get_medsupplier_context(self):
         return resolve_medsupplier_context(self.request.user, self.get_organization_id())
@@ -926,7 +923,7 @@ class EvidencePackageEntryViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset().filter(package__organization_id=self.get_organization_id())
         context = self.get_medsupplier_context()
-        if context.is_customer:
+        if context.is_customer or context.account_ids:
             queryset = queryset.filter(package__account_id__in=context.account_ids)
         return queryset
 
@@ -939,7 +936,7 @@ class EvidencePackageEntryViewSet(viewsets.ModelViewSet):
 
 
 def _resolve_organization_id(request):
-    value = request.query_params.get('organization_id') or getattr(request, 'organization_id', None)
+    value = getattr(request, 'organization_id', None)
     if not value:
         return None
     return int(value)
@@ -964,6 +961,7 @@ def _get_user_profile(user, organization_id):
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def effective_permissions(request):
+    grant = authorize_resources(request, ('medsupplier.supplieraccount',))
     organization_id = _resolve_organization_id(request)
     if not organization_id:
         return Response({'organization_id': 'organization_id requerido'}, status=400)
@@ -975,7 +973,10 @@ def effective_permissions(request):
         'account_ids': list(context.account_ids),
         'source': context.source,
         'permissions': {
-            'can_mutate': context.can_mutate,
+            'can_mutate': context.can_mutate and context.is_supplier and any(
+                scope.startswith('MEDSUPPLIER:medsupplier.') and scope.rsplit(':', 1)[-1] in {'create', 'update', 'delete'}
+                for scope in grant['scopes']
+            ),
             'can_view_private_financials': context.can_view_private_financials,
             'can_access_supplier_cockpit': context.can_access_supplier_cockpit,
             'is_read_only': context.is_read_only,
@@ -987,6 +988,7 @@ def effective_permissions(request):
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def dashboard_summary(request):
+    authorize_resources(request, ('medsupplier.supplieraccount', 'medsupplier.supplierqualityevent', 'medsupplier.supplieraction', 'medsupplier.supplierscorecard', 'medsupplier.supplierrfq', 'medsupplier.supplierpurchaseorder', 'medsupplier.suppliershipment', 'medsupplier.supplierquote'))
     organization_id = _resolve_organization_id(request)
     if not organization_id:
         return Response({'organization_id': 'organization_id requerido'}, status=400)
@@ -1031,23 +1033,24 @@ def dashboard_summary(request):
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def private_cockpit(request):
+    authorize_resources(request, ('medsupplier.supplieraccount', 'medsupplier.supplierquote', 'medsupplier.supplierpurchaseorder', 'medsupplier.supplierrfq'))
     organization_id = _resolve_organization_id(request)
     if not organization_id:
         return Response({'organization_id': 'organization_id requerido'}, status=400)
     context = resolve_medsupplier_context(request.user, organization_id)
-    if not context.can_access_supplier_cockpit:
+    if not context.can_access_supplier_cockpit or not context.can_view_private_financials:
         return Response({'detail': 'Cockpit privado disponible solo para Supplier Admin/Finance/Sales.'}, status=403)
 
-    accounts = models.SupplierAccount.objects.filter(organization_id=organization_id)
-    quotes = models.SupplierQuote.objects.filter(organization_id=organization_id)
-    open_orders = models.SupplierPurchaseOrder.objects.filter(organization_id=organization_id).exclude(status__in=['closed', 'cancelled'])
+    accounts = filter_queryset_for_context(models.SupplierAccount.objects.all(), context)
+    quotes = filter_queryset_for_context(models.SupplierQuote.objects.all(), context)
+    open_orders = filter_queryset_for_context(models.SupplierPurchaseOrder.objects.all(), context).exclude(status__in=['closed', 'cancelled'])
     today = timezone.now().date()
     return Response({
         'organization_id': organization_id,
         'role': context.role,
         'opportunities': {
             'accounts': accounts.count(),
-            'rfqs': models.SupplierRFQ.objects.filter(organization_id=organization_id).count(),
+            'rfqs': filter_queryset_for_context(models.SupplierRFQ.objects.all(), context).count(),
             'quotes_pending': quotes.filter(status__in=['draft', 'submitted']).count(),
             'orders_open': open_orders.count(),
         },
@@ -1090,6 +1093,7 @@ def private_cockpit(request):
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def integration_status(request):
+    authorize_resources(request, ('medsupplier.supplieraccount',))
     organization_id = _resolve_organization_id(request)
     if not organization_id:
         return Response({'organization_id': 'organization_id requerido'}, status=400)

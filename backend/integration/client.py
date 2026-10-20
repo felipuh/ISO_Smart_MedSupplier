@@ -80,6 +80,11 @@ class AdminAppsClient:
         """Realiza una petición a Admin Apps"""
         url = f"{self.base_url}{endpoint}"
         
+        # Service grants and credential revocation are live authority. These
+        # protected reads must reach AdminApps even when callers request caching.
+        if endpoint.startswith('/organizations/') or endpoint == '/user/':
+            use_cache = False
+
         # Verificar caché si aplica
         if use_cache and cache_key:
             cached = cache.get(cache_key)
@@ -121,10 +126,21 @@ class AdminAppsClient:
         
         except requests.exceptions.HTTPError as e:
             logger.error(f"Error HTTP de Admin Apps: {e}")
-            try:
-                return response.json()
-            except:
-                return {'error': str(e), 'code': 'http_error'}
+            # A missing/disabled tenant may be hidden behind 404. Any client
+            # error is a central rejection, never permission to use local data.
+            if 400 <= response.status_code < 500:
+                try:
+                    denial = response.json()
+                except ValueError:
+                    denial = {}
+                if not isinstance(denial, dict):
+                    denial = {}
+                return {**denial, 'allowed': False, 'authorization_denied': True,
+                        'error': 'AdminApps authorization denied',
+                        'code': denial.get('code', 'authorization_denied')}
+            # A server error body is not an authorization result, even if it
+            # contains allowed/valid/modules. Keep only a transport error.
+            return {'error': 'AdminApps request failed', 'code': 'http_error'}
         
         except Exception as e:
             logger.exception(f"Error inesperado con Admin Apps: {e}")
@@ -149,7 +165,7 @@ class AdminAppsClient:
         )
         
         # Si hay error, intentar fallback a BD local
-        if 'error' in result and Organization:
+        if 'error' in result and Organization and not result.get('authorization_denied'):
             if not self._local_fallback_allowed():
                 return self._fallback_disabled_response(result)
             logger.warning(f"Admin Apps falló ({result.get('error')}), usando fallback de BD local")
@@ -191,7 +207,7 @@ class AdminAppsClient:
         )
         
         # Si hay error, intentar fallback a BD local
-        if 'error' in result and Organization:
+        if 'error' in result and Organization and not result.get('authorization_denied'):
             if not self._local_fallback_allowed():
                 return self._fallback_disabled_response(result)
             logger.warning(f"Admin Apps falló ({result.get('error')}), usando fallback de BD local para org {org_id}")
@@ -239,7 +255,7 @@ class AdminAppsClient:
         )
         
         # Si hay error, fallback: retornar admin local
-        if 'error' in result:
+        if 'error' in result and not result.get('authorization_denied'):
             if not self._local_fallback_allowed():
                 return self._fallback_disabled_response(result)
             logger.warning(f"Admin Apps falló ({result.get('error')}), retornando usuarios locales para org {org_id}")
@@ -289,7 +305,7 @@ class AdminAppsClient:
         )
         
         # Si hay error, fallback a BD local
-        if 'error' in result:
+        if 'error' in result and not result.get('authorization_denied'):
             if not self._local_fallback_allowed():
                 return self._fallback_disabled_response(result)
             logger.warning(f"Admin Apps falló ({result.get('error')}), retornando módulos locales para org {org_id}")
@@ -510,7 +526,7 @@ class AdminAppsClient:
         """Verifica si un módulo está habilitado para una organización"""
         result = self.get_organization_modules(org_id)
         
-        if 'error' in result:
+        if 'error' in result or result.get('authorization_denied'):
             return False
         
         modules = result.get('modules', [])
