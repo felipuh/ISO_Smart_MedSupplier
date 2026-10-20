@@ -160,7 +160,6 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'integration.sso_auth.Smart3AISSOAuthentication',  # Centralized SSO JWT
-        'rest_framework_simplejwt.authentication.JWTAuthentication',  # JWT authentication
         'rest_framework.authentication.SessionAuthentication',  # Session authentication para desarrollo
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
