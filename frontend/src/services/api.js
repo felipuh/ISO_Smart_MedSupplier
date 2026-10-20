@@ -125,10 +125,11 @@ api.interceptors.response.use(
 
       const { access, refresh: newRefresh } = response.data;
 
-      localStorage.setItem('access_token', access);
-      if (newRefresh) {
-        localStorage.setItem('refresh_token', newRefresh);
+      if (typeof access !== 'string' || !access || typeof newRefresh !== 'string' || !newRefresh) {
+        throw new Error('Respuesta de rotación incompleta.');
       }
+      localStorage.setItem('access_token', access);
+      localStorage.setItem('refresh_token', newRefresh);
 
       api.defaults.headers.common['Authorization'] = `Bearer ${access}`;
       processQueue(null, access);

@@ -2,8 +2,6 @@ from dataclasses import dataclass
 
 from rest_framework.exceptions import PermissionDenied
 
-from authentication.models import UserProfile
-
 from . import models
 
 
@@ -74,7 +72,7 @@ class MedSupplierContext:
 
     @property
     def can_mutate(self):
-        return not self.is_read_only
+        return self.role in (SUPPLIER_ROLES | CUSTOMER_ROLES) - READ_ONLY_ROLES
 
     @property
     def can_view_private_financials(self):
@@ -86,76 +84,45 @@ class MedSupplierContext:
 
     @property
     def visible_visibilities(self):
-        return SUPPLIER_VISIBLE_VISIBILITIES if self.is_supplier else CUSTOMER_VISIBLE_VISIBILITIES
+        return (SUPPLIER_VISIBLE_VISIBILITIES
+                if self.is_supplier and self.role in SUPPLIER_PRIVATE_ROLES
+                else CUSTOMER_VISIBLE_VISIBILITIES)
 
     def has_account_scope(self, account_id):
-        if self.is_supplier:
+        if self.is_supplier and not self.account_ids:
             return True
         return int(account_id) in self.account_ids
-
-
-def _fallback_context(user, organization_id):
-    profile = UserProfile.objects.filter(
-        user=user,
-        organization_id=organization_id,
-        is_active=True,
-    ).first()
-    if not profile:
-        return None
-    if profile.role in {'org_admin', 'iso_manager'}:
-        return MedSupplierContext(
-            organization_id=int(organization_id),
-            side='supplier',
-            role='supplier_admin',
-            account_ids=(),
-            source='user_profile_fallback',
-        )
-    if profile.role == 'auditor':
-        return MedSupplierContext(
-            organization_id=int(organization_id),
-            side='customer',
-            role='customer_auditor',
-            account_ids=tuple(),
-            source='user_profile_fallback',
-        )
-    if profile.role == 'viewer':
-        return MedSupplierContext(
-            organization_id=int(organization_id),
-            side='supplier',
-            role='supplier_viewer',
-            account_ids=(),
-            source='user_profile_fallback',
-        )
-    return None
 
 
 def resolve_medsupplier_context(user, organization_id):
     if not user or not user.is_authenticated:
         raise PermissionDenied('Autenticación requerida.')
-    if user.is_superuser:
-        return MedSupplierContext(
-            organization_id=int(organization_id),
-            side='supplier',
-            role='supplier_admin',
-            account_ids=(),
-            source='superuser',
-        )
-
     scopes = list(
         models.MedSupplierUserScope.objects.filter(
             user=user,
             organization_id=organization_id,
             is_active=True,
-        ).values('side', 'role', 'account_id')
+        ).values('side', 'role', 'account_id', 'account__organization_id')
     )
     if scopes:
+        sides = {scope['side'] for scope in scopes}
+        roles = {scope['role'] for scope in scopes}
+        if len(sides) != 1 or len(roles) != 1:
+            raise PermissionDenied('Asignación MedSupplier ambigua.')
+        role = next(iter(roles))
+        if ((sides == {'supplier'} and role not in SUPPLIER_ROLES)
+                or (sides == {'customer'} and role not in CUSTOMER_ROLES)
+                or sides not in ({'supplier'}, {'customer'})):
+            raise PermissionDenied('Asignación MedSupplier inválida.')
+        if any(scope['account_id'] and str(scope.get('account__organization_id')) != str(organization_id) for scope in scopes):
+            raise PermissionDenied('Asignación MedSupplier inválida.')
         supplier_scope = next((scope for scope in scopes if scope['side'] == 'supplier'), None)
         if supplier_scope:
             return MedSupplierContext(
                 organization_id=int(organization_id),
                 side='supplier',
                 role=supplier_scope['role'],
-                account_ids=tuple(),
+                account_ids=tuple(sorted({scope['account_id'] for scope in scopes if scope['account_id']})),
             )
         account_ids = tuple(sorted({scope['account_id'] for scope in scopes if scope['account_id']}))
         if not account_ids:
@@ -167,9 +134,6 @@ def resolve_medsupplier_context(user, organization_id):
             account_ids=account_ids,
         )
 
-    fallback = _fallback_context(user, organization_id)
-    if fallback:
-        return fallback
     raise PermissionDenied('No tienes acceso MedSupplier para esta organización.')
 
 
@@ -180,7 +144,7 @@ def filter_queryset_for_context(queryset, context):
 
     queryset = queryset.filter(organization_id=context.organization_id)
 
-    if context.is_customer:
+    if context.is_customer or context.account_ids:
         if model is models.MedSupplierAuditEvent:
             queryset = queryset.filter(account_id__in=context.account_ids, exportable=True)
         elif model is models.SupplierAccount:
@@ -199,14 +163,24 @@ def filter_queryset_for_context(queryset, context):
 
 
 def assert_object_allowed(obj, context):
-    account = getattr(obj, 'account', None)
+    if isinstance(obj, models.EvidencePackageEntry):
+        obj = obj.package
+    if str(getattr(obj, 'organization_id', None)) != str(context.organization_id):
+        raise PermissionDenied('Objeto no autorizado.')
+    account = obj if isinstance(obj, models.SupplierAccount) else getattr(obj, 'account', None)
+    if account is not None and str(account.organization_id) != str(context.organization_id):
+        raise PermissionDenied('Objeto no autorizado.')
     if account is None and hasattr(obj, 'document'):
+        if str(obj.document.organization_id) != str(context.organization_id):
+            raise PermissionDenied('Objeto no autorizado.')
         account = getattr(obj.document, 'account', None)
-    if context.is_customer:
+    if hasattr(obj, 'visibility') and obj.visibility not in context.visible_visibilities:
+        raise PermissionDenied('Objeto no autorizado.')
+    if context.is_customer or context.account_ids:
         if not account or not context.has_account_scope(account.id):
             raise PermissionDenied('Objeto fuera del account_scope permitido.')
         visibility = getattr(obj, 'visibility', 'customer_shared')
-        if visibility not in CUSTOMER_VISIBLE_VISIBILITIES:
+        if visibility not in context.visible_visibilities:
             raise PermissionDenied('Objeto no compartido con Customer.')
     return True
 
