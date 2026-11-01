@@ -19,6 +19,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Cargar variables de entorno desde backend/.env si existe
 load_dotenv(BASE_DIR / '.env')
 
+from runtime_sso_config import load_runtime_sso_config
+_runtime_sso = load_runtime_sso_config(os.environ, 'MEDSUPPLIER')
+os.environ.update(_runtime_sso.get('environment', {}))
+
 
 def _env_bool(name, default=False):
     value = os.getenv(name)
@@ -477,3 +481,7 @@ CSRF_EXEMPT_URLS = [r'^api/']
 # Media files (uploads)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media/uploads')
+
+
+# Declarative private SSO keyrings and client binding, validated before startup.
+globals().update(_runtime_sso.get('settings', {}))
