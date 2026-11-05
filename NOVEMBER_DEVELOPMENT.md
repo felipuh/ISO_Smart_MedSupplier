@@ -22,3 +22,13 @@ Gitleaks 8.30.1 is required. Its verified download checksum is recorded in `.git
 The frontend consumes the identical reviewed shared Design System 1.0.0-beta.1 archive, pinned by npm integrity and SHA-256 under `frontend/vendor/`. It builds from a standalone checkout without a sibling design-system directory. Change the library at its shared source, then update all consumers from one reviewed package. Development and preview bind to loopback by default; no local TLS setup is required.
 
 Do not start application servers with test settings for real users. Configure central identity/trust and dedicated development data through a separate, reviewed setup. These checks deliberately deny database and network connections; HTTP SSO E2E, PostgreSQL RLS, migrations, persistence and external-user acceptance remain pending. Retained financial capabilities are not activated.
+
+## NOV-P0 independent development runtime
+
+Run `.venv-development/bin/python -B scripts/check_development_environment.py`
+from this checkout to verify the interpreter prefix, all locked versions and
+package locations without importing settings, dotenv or opening a database.
+The environment is product-local and must never replace a service interpreter.
+Use the existing hash-locked install command above in a NEW environment only.
+Cached wheels may be reused; installed packages must not reference a sibling
+product or a historical temporary virtualenv.
